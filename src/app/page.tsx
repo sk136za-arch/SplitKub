@@ -5,6 +5,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { billReducer, emptyBill, type BillAction } from "@/lib/billState";
 import { calculateBill, type BillResult } from "@/lib/calculateBill";
 import { formatMoney, moneyInput, parseMoney, sumMoneyChecked } from "@/lib/money";
+import { createClientId } from "@/lib/id";
 import { isValidPromptPay } from "@/lib/promptpay";
 import { clearBillStorage, loadBillSafely, saveBill, shouldPersistBill } from "@/lib/storage";
 import { participantLabels } from "@/lib/participantLabels";
@@ -81,14 +82,14 @@ export default function Home() {
     const name = itemName.trim(); const price = parseMoney(itemPrice);
     if (!name) { setItemError("กรุณาใส่ชื่อรายการ"); return; }
     if (price === null) { setItemError("ใส่ราคามากกว่า 0 และทศนิยมไม่เกิน 2 ตำแหน่ง"); return; }
-    dispatch(editingItem ? { type: "edit-item", id: editingItem, name, price } : { type: "add-item", id: crypto.randomUUID(), name, price });
+    dispatch(editingItem ? { type: "edit-item", id: editingItem, name, price } : { type: "add-item", id: createClientId(), name, price });
     setItemName(""); setItemPrice(""); setEditingItem(null); setItemError("");
   }
 
   function submitPerson(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); const name = personName.trim();
     if (!name) { setPersonError("กรุณาใส่ชื่อคนร่วมบิล"); return; }
-    dispatch(editingPerson ? { type: "edit-person", id: editingPerson, name } : { type: "add-person", id: crypto.randomUUID(), name });
+    dispatch(editingPerson ? { type: "edit-person", id: editingPerson, name } : { type: "add-person", id: createClientId(), name });
     setPersonName(""); setEditingPerson(null); setPersonError("");
   }
 

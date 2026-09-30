@@ -25,6 +25,7 @@ Implement integer money and calculation first, then reducer and versioned browse
 - Added stable duplicate participant labels across split controls, summary headings, and shared text; raised danger and remaining action targets to at least 44px.
 - Made duplicate labels collision-proof by prefixing every participant in the bill when raw names repeat; applied the same labels to participant CRUD names and accessible action labels.
 - Gave the header brand link a 44px minimum target and guarded localStorage access so hydration always reaches ready state.
+- Added a client ID generator with Web Crypto and non-secure-context fallbacks so item/person creation works during mobile testing over local HTTP.
 
 ## Architecture Decisions
 
@@ -38,7 +39,7 @@ Unit tests cover money input and aggregate safe-integer boundaries, equal and un
 
 ## Validation
 
-Final validation passed: `npm run test` (6 files, 31 tests), `npm run lint`, `npm run build`, and `git diff --check`. Earlier corrective builds exposed an optional `started` envelope type omission and the ES2017 target's BigInt literal syntax limitation; both were corrected before successful builds. Dependency audit reported zero vulnerabilities after upgrading Next.js and Vitest.
+Final validation passed: `npm run test` (7 files, 34 tests), `npm run lint`, `npm run build`, and `git diff --check`. Earlier corrective builds exposed an optional `started` envelope type omission and the ES2017 target's BigInt literal syntax limitation; both were corrected before successful builds. Dependency audit reported zero vulnerabilities after upgrading Next.js and Vitest.
 
 ## Review Findings
 
