@@ -2,69 +2,62 @@
 
 ## Task
 
-Build SplitKub MVP 1 from the approved plan, including THB/USD bills.
+Make SplitKub sharing payment-first, then add a dismissible success toast and a recognizable mascot brand across the app and summary PNG.
 
 ## Result
 
-A client-side Next.js bill splitter is implemented. Users can add and edit items and people, assign each item, calculate and inspect totals, enter PromptPay for THB, preview a local QR image, and share or copy the summary.
+The payment panel precedes the sharing actions. THB text copying requires a valid PromptPay number; image sharing requires an uploaded QR for either currency. Successful text copying now raises an accessible three-second toast. The PNG includes the bill total, per-person totals, currency, uploaded QR, a valid PromptPay number when applicable, and the mascot brand mark.
 
 ## Implementation Plan
 
-Implement integer money and calculation first, then reducer and versioned browser storage, UI flow, payment and share handling, and validation.
+Extract payment readiness and share text from the page, add clipboard fallbacks, render the PNG with browser Canvas, and connect Web Share file support to a download fallback. Verify mobile-relevant failure paths and existing bill behavior.
+
+Add a reusable toast whose timer restarts on each successful copy and cleans up when dismissed or unmounted. Use the generated full-body mascot on the landing page and summary image, and its transparent bust crop for the compact header and browser icons.
 
 ## Changes Made
 
-- Added Next.js App Router, TypeScript, Tailwind CSS, ESLint, and Vitest setup.
-- Added money parsing/formatting, deterministic split calculation, bill reducer, storage validation, and PromptPay validation.
-- Added responsive landing, bill editor, mobile split cards, desktop matrix, summary, payment, and share UI.
-- Corrected large-amount money parsing, display formatting, and edit-input conversion to preserve accepted safe-integer satang/cents exactly.
-- Added Thai national-ID checksum validation and expanded PromptPay checksum tests.
-- Increased split chip and select/clear touch targets to at least 44px and enabled long labels to wrap in mobile and desktop split views.
-- Prevented unstarted first visits from writing an empty bill; explicit empty starts are marked and restored, while clear removes only the SplitKub key.
-- Added checked aggregate totals with an accessible overflow message instead of rendering an inexact amount.
-- Added stable duplicate participant labels across split controls, summary headings, and shared text; raised danger and remaining action targets to at least 44px.
-- Made duplicate labels collision-proof by prefixing every participant in the bill when raw names repeat; applied the same labels to participant CRUD names and accessible action labels.
-- Gave the header brand link a 44px minimum target and guarded localStorage access so hydration always reaches ready state.
-- Added a client ID generator with Web Crypto and non-secure-context fallbacks so item/person creation works during mobile testing over local HTTP.
+- Added `src/lib/share.ts` for sharing eligibility, normalized PromptPay text, clipboard fallback, and share cancellation detection.
+- Added `src/lib/summaryImage.ts` for a 1080px branded PNG with dynamic height, duplicate-name labels, readable payment section, and uploaded QR.
+- Moved sharing controls below the payment inputs. Disabled controls explain their required input; the copy failure path shows selectable text.
+- The PNG is prepared after a 200ms quiet period and cached by currency, PromptPay, QR URL, total, and rendered participant fields. The share click uses only an image whose cache key still matches the current bill.
+- When native file sharing is available, preparation creates the actual PNG `File` and checks it with `navigator.canShare`; the button label reflects that result. The click immediately invokes `navigator.share` with the prepared file. Otherwise, the download path uses only the Blob. Cancelling the native share dialog does not trigger a download.
+- Replacing a QR first revokes and clears the previous image, so an invalid type or oversized replacement cannot leave a stale payment QR active. QR decode/export failures expose a retryable accessible status instead of creating an incomplete image. Temporary download object URLs are revoked.
+- Added focused tests for payment rules, share text, browser clipboard paths, QR decode/export, and dynamic image height.
+- Added `SuccessToast` with a three-second resettable timer, keyboard-accessible close button, polite live status, and mobile safe-area placement. Copy errors and manual-copy text remain inline.
+- Added transparent mascot assets in `public/brand/`, a compact header icon, a reserved-size landing image, and Next.js icon metadata.
+- The summary renderer loads the QR and mascot together; a mascot failure falls back to the text wordmark, while a QR failure still prevents exporting an incomplete payment image.
 
 ## Architecture Decisions
 
-- Values are integer satang or cents; currency is fixed after the first item is added.
-- A new item selects existing participants. New participants are not assigned to prior items.
-- Uploaded QR files remain only in page memory through an object URL.
+- QR images remain in browser memory, as in MVP 1. The PNG is generated locally after payment inputs settle and is never uploaded to a server.
+- THB text copying is enabled only for a valid PromptPay number. Uploaded-QR-only bills are shared as an image because plain text cannot include the QR.
+- USD image sharing uses the uploaded QR and never displays a PromptPay number.
 
 ## Tests
 
-Unit tests cover money input and aggregate safe-integer boundaries, equal and uneven splits, per-item assignment, reducer behavior, storage corruption/empty-start/clear/accessor-failure behavior, participant label collisions, and PromptPay checksum validation.
+`npm run test` passed: 9 files, 49 tests. Tests cover THB/USD payment readiness, duplicate participant labels, compact PromptPay text, Clipboard API/legacy/manual paths, cancellation, native file-share capability checks, canvas size limits, cache-key invalidation, QR decode failure, QR drawing/export, mascot failure fallback, and toast timer reset/cleanup.
 
 ## Validation
 
-Final validation passed: `npm run test` (7 files, 34 tests), `npm run lint`, `npm run build`, and `git diff --check`. Earlier corrective builds exposed an optional `started` envelope type omission and the ES2017 target's BigInt literal syntax limitation; both were corrected before successful builds. Dependency audit reported zero vulnerabilities after upgrading Next.js and Vitest.
+`npm run lint`, `npm run build`, and `git diff --check` passed. The build completed with Next.js 16.3.7. The line-ending notices from Git on Windows are non-failing warnings.
 
 ## Review Findings
 
-The PromptPay field originally hid the summary while editing; it now preserves the result and includes a valid number in shared text. Next.js 16 required native flat ESLint configuration and a client hydration rule exemption. Corrective review found large-value floating precision risks, missing Thai ID checksum validation, undersized split controls, long-name wrapping gaps, empty-first-visit persistence, aggregate overflow display, duplicate-name ambiguity/collisions, and localStorage accessor failures; fixes and targeted tests were added.
+The previous share button only attempted Web Share text or secure-context Clipboard API and did not include the uploaded QR. The new flow includes the payment method and remains usable over local HTTP through legacy/manual copy and PNG download.
 
 ## Problems Found and Fixed
 
-- Replaced vulnerable Next.js 15 / Vitest 3 dependencies with patched Next.js 16 / Vitest 5.
-- Updated ESLint configuration for Next.js 16 and resolved its React effect lint errors.
-- Replaced floating-point money conversions with integer/BigInt string handling and added maximum-boundary round-trip coverage.
-- Validated 13-digit Thai national IDs with their checksum and replaced the invalid passing fixture.
-- Made split controls meet a 44px minimum touch target and wrapped long item/participant names.
-- Made persistence conditional on an explicit start or non-empty bill, tagged explicit starts for restore, and tested empty legacy payloads and key clearing.
-- Added checked-sum behavior and an accessible overflow state, stable participant labels, and 44px danger/checkbox/action targets.
-- Prevented participant-label collisions involving names that resemble suffix labels, and used labels for participant-list text and edit/delete accessible names.
-- Added safe storage accessor resolution with `finally`-guarded hydration readiness and expanded tests for accessor exceptions.
+The first test run exposed Vitest's lack of the Next.js `@/` path alias for the new library modules; imports were changed to relative paths. A duplicate-name test expectation was aligned with the project's existing numbered label format.
 
 ## Remaining Concerns
 
-Independent browser checks covered the main bill flow and target responsive widths without console errors or horizontal overflow. Actual QR-file upload and the native share/clipboard actions remain unverified. QR images intentionally remain only on the current page and are not embedded in shared text.
+Native share dialogs and mobile download behavior depend on the device/browser and have not yet been exercised on a physical phone. PNG rendering was tested with a mocked canvas and QR, and should receive an on-device visual check.
+The toast and brand layout should also receive a physical mobile visual check, especially at 375px and with the software keyboard open.
 
 ## Files Changed
 
-Application source under `src/`, tool configuration, `package.json`, `package-lock.json`, and `README.md`.
+`src/app/page.tsx`, `src/app/globals.css`, `src/app/layout.tsx`, `src/components/SuccessToast.tsx`, `src/lib/share.ts`, `src/lib/summaryImage.ts`, `src/__tests__/share.test.ts`, `src/__tests__/successToast.test.ts`, `public/brand/splitkub-mascot.png`, `public/brand/splitkub-icon.png`, and this summary.
 
 ## Final Status
 
-Implementation complete. Independent testing and review found no remaining P1/P2 blocker.
+Implementation and repository checks complete. No commit or deployment was made.

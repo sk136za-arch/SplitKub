@@ -13,8 +13,11 @@ button:disabled { cursor: not-allowed; }
 .field:focus { outline: 3px solid #e3dbff; border-color: #7652dd; }
 .btn-primary { min-height: 46px; border: 0; border-radius: 12px; padding: 10px 18px; background: #6745c6; color: white; font-weight: 700; }
 .btn-primary:hover { background: #5234aa; }
+.btn-primary:disabled, .btn-secondary:disabled { opacity: .55; cursor: not-allowed; }
+.btn-primary:disabled:hover { background: #6745c6; }
 .btn-secondary { min-height: 44px; border: 1px solid #d9d3ea; border-radius: 12px; padding: 9px 16px; background: white; color: #4d397d; font-weight: 700; }
 .btn-secondary:hover { background: #f3efff; }
+.btn-secondary:disabled:hover { background: #fff; }
 .btn-danger { min-height: 44px; border: 1px solid #f2c9d2; border-radius: 11px; padding: 9px 12px; background: #fff8f9; color: #a43a53; }
 .eyebrow { color: #7354bd; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .muted { color: #726d82; }
@@ -33,4 +36,6 @@ button:disabled { cursor: not-allowed; }
 .matrix th, .matrix td { overflow-wrap: anywhere; }
 .matrix .split-action { min-width: 72px; }
 .matrix-checkbox-target { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; justify-content: center; }
+.toast-position { left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px); }
+@media (min-width: 640px) { .toast-position { left: auto; right: 24px; bottom: 24px; width: min(440px, calc(100vw - 48px)); } }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
