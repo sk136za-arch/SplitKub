@@ -9,11 +9,12 @@ import { createClientId } from "@/lib/id";
 import { isValidPromptPay } from "@/lib/promptpay";
 import { clearSessionStorage, dismissSessionMigrationNotice, loadSessionSafely, pendingLegacyPromptPay as readPendingLegacyPromptPay, resolveStorageSafely, saveAssignedLegacyPromptPay, saveConfirmedRemoteSession, saveSession, sessionMigrationNotice, shouldPersistSession } from "@/lib/storage";
 import { shouldApplyRemoteRevision } from "@/lib/sharedSnapshot";
+import { ephemeralOwnerCapability, type OwnerCapability } from "@/lib/sharedLinkRouting";
 import { participantLabels } from "@/lib/participantLabels";
-import { SharedSubscriptionController } from "@/lib/sharedSubscription";
+import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive } from "@/lib/sharedSubscription";
 import { buildSessionShareText, copyTextWithFallback, isShareCancelled, prepareNativeShareFile, qrDestinationKey, resolveQrRecipient, sessionSharingAvailability, type QrRecipientSelection } from "@/lib/share";
 import { createSessionSummaryImage, preparedImageMatchesKey, sessionSummaryImageCacheKey } from "@/lib/summaryImage";
-import { createSharedSession, openSharedBill, refreshSharedBill, saveSharedOwnerAction, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, type SharedCreated } from "@/hooks/sharedBillAdapter";
+import { createSharedSession, openSharedBill, refreshSharedBill, saveSharedOwnerAction, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, type SharedCreated, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import type { Currency, SessionParticipant } from "@/types/bill";
 import { ReceiptEditor } from "./ReceiptEditor";
 import { SessionSummary } from "./SessionSummary";
@@ -24,7 +25,6 @@ const OWNER_KEY = "splitkub:shared-owner:v1";
 const MAX_QR_BYTES = 5 * 1024 * 1024;
 const QR_TYPES = ["image/png", "image/jpeg", "image/webp"];
 
-interface OwnerCapability { publicId: string; billId: string; ownerToken: string; friendToken: string }
 interface PreparedImage { key: string | null; status: "idle" | "preparing" | "ready" | "error"; blob?: Blob; file?: File; error?: string }
 
 function readOwnerCapability(storage: Storage): OwnerCapability | null {
@@ -60,7 +60,7 @@ function PersonRow({ person, currency, disabled, onRename, onPromptPay, onRemove
   </li>;
 }
 
-export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerToken: string } }) {
+export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: string; ownerToken: string }; joinedOwner?: SharedOpen }) {
   const router = useRouter();
   const [session, rawDispatch] = useReducer(sessionReducer, undefined, emptySession);
   const [ready, setReady] = useState(false);
@@ -91,43 +91,100 @@ export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerTok
   const toastId = useRef(0);
   const pendingRef = useRef(false);
   const latestRevision = useRef(0);
+  const remoteGeneration = useRef(0);
+  const refreshInFlight = useRef<{ billId: string; generation: number; dirty: boolean; promise: Promise<boolean> } | null>(null);
+  const subscribedGeneration = useRef(-1);
   const [subscriptionController] = useState(() => new SharedSubscriptionController(subscribeSharedBill));
   const dismissToast = useCallback(() => setToast(null), []);
 
   function notifySuccess(text: string) { toastId.current += 1; setToast({ id: toastId.current, text }); }
-  const refreshRemote = useCallback(async (billId: string) => {
-    try {
-      const next = await refreshSharedBill(billId);
-      if (!shouldApplyRemoteRevision(latestRevision.current, next.revision)) return;
-      latestRevision.current = next.revision;
-      rawDispatch({ type: "restore", session: next });
-      setActionMessage("");
-    } catch (caught) { setRemoteStatus(navigator.onLine ? "stale" : "offline"); setActionMessage(sharedErrorMessage(caught)); }
+  // The callback intentionally coordinates mutable generation/request refs across async refreshes.
+  const refreshRemote = useCallback((billId: string, generation = remoteGeneration.current): Promise<boolean> => {
+    if (generation !== remoteGeneration.current) return Promise.resolve(false);
+    if (refreshInFlight.current?.billId === billId && refreshInFlight.current.generation === generation) {
+      refreshInFlight.current.dirty = true;
+      return refreshInFlight.current.promise;
+    }
+    const request = { billId, generation, dirty: false, promise: Promise.resolve(false) };
+    const promise = (async () => {
+      const refreshOnce = async () => {
+        try {
+          const next = await refreshSharedBill(billId);
+          if (generation !== remoteGeneration.current) return false;
+          if (shouldApplyRemoteRevision(latestRevision.current, next.revision)) {
+            latestRevision.current = next.revision;
+            rawDispatch({ type: "restore", session: next });
+          }
+          setActionMessage("");
+          return true;
+        } catch (caught) {
+          if (generation !== remoteGeneration.current) return false;
+          setRemoteStatus(navigator.onLine ? "stale" : "offline"); setActionMessage(sharedErrorMessage(caught));
+          return false;
+        }
+      };
+      let succeeded = false;
+      try {
+        succeeded = await refreshWithTrailingDirty(refreshOnce, () => request.dirty, () => { request.dirty = false; });
+      } finally {
+        if (refreshInFlight.current === request) refreshInFlight.current = null;
+      }
+      return succeeded;
+    })();
+    request.promise = promise;
+    refreshInFlight.current = request;
+    return promise;
   }, []);
-  const reconnectRealtime = useCallback((billId: string) => subscriptionController.restart(billId, {
-    onChange: () => { void refreshRemote(billId); },
-    onError: (caught) => { setRemoteStatus("stale"); setActionMessage(sharedErrorMessage(caught)); },
+  const reconnectRealtime = useCallback((billId: string) => {
+    const generation = ++remoteGeneration.current;
+    subscribedGeneration.current = -1;
+    return subscriptionController.restart(billId, {
+    onChange: () => { void refreshRemote(billId, generation); },
+    onError: (caught) => { if (generation !== remoteGeneration.current) return; subscribedGeneration.current = -1; setRemoteStatus("stale"); setActionMessage(sharedErrorMessage(caught)); },
     onStatus: (status) => {
-      if (status === "SUBSCRIBED") setRemoteStatus(navigator.onLine ? "live" : "offline");
-      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setRemoteStatus("stale");
+      if (generation !== remoteGeneration.current) return;
+      if (status === "SUBSCRIBED") {
+        subscribedGeneration.current = generation;
+        if (!navigator.onLine) { setRemoteStatus("offline"); return; }
+        setRemoteStatus("connecting");
+        void refreshRemote(billId, generation).then((refreshed) => {
+          if (shouldMarkSubscriptionLive(refreshed, generation, remoteGeneration.current, subscribedGeneration.current)) setRemoteStatus(navigator.onLine ? "live" : "offline");
+        });
+      } else {
+        subscribedGeneration.current = -1;
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setRemoteStatus("stale");
+      }
     },
-  }), [refreshRemote, subscriptionController]);
+  });
+  }, [refreshRemote, subscriptionController]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Restore browser-only draft and owner capability after hydration. */
   useEffect(() => {
+    let cancelled = false;
+    const openedFromHash = window.location.hash;
     try {
       const storage = resolveStorageSafely(() => window.localStorage);
-      if (recovery) latestRevision.current = -1;
-      const saved = recovery || !storage ? null : loadSessionSafely(() => storage!);
+      if (recovery || joinedOwner) latestRevision.current = -1;
+      const saved = recovery || joinedOwner || !storage ? null : loadSessionSafely(() => storage!);
       if (saved) {
         rawDispatch({ type: "restore", session: saved }); setStarted(true); latestRevision.current = saved.revision;
       }
       setTitleDraft(saved?.title ?? emptySession().title);
-      if (storage && !recovery) {
+      if (storage && !recovery && !joinedOwner) {
         setMigrationWarning(sessionMigrationNotice(storage));
         setPendingLegacyPromptPay(readPendingLegacyPromptPay(storage));
       }
       setShareAvailable(sharingIsAvailable());
+      if (joinedOwner) {
+        const capability = ephemeralOwnerCapability(joinedOwner);
+        latestRevision.current = joinedOwner.snapshot.revision;
+        rawDispatch({ type: "restore", session: joinedOwner.snapshot });
+        setTitleDraft(joinedOwner.snapshot.title);
+        setStarted(true);
+        setOwner(capability);
+        setRemoteStatus("connecting");
+        return;
+      }
       const capability = recovery
         ? { publicId: recovery.publicId, billId: "", ownerToken: recovery.ownerToken, friendToken: "" }
         : storage ? readOwnerCapability(storage) : null;
@@ -135,6 +192,7 @@ export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerTok
         setOwner({ ...capability, billId: "" });
         setRemoteStatus("connecting");
         void openSharedBill(capability.publicId, capability.ownerToken, "owner").then((opened) => {
+          if (cancelled || (recovery && window.location.hash !== openedFromHash)) return;
           const resolved = { ...capability, billId: opened.billId };
           setOwner(resolved);
           if (shouldApplyRemoteRevision(latestRevision.current, opened.snapshot.revision)) {
@@ -145,21 +203,22 @@ export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerTok
             setRemoteStatus("connecting");
           } else setRemoteStatus("stale");
           if (!recovery && storage) { try { storage.setItem(OWNER_KEY, JSON.stringify(resolved)); } catch { /* Link still works this session. */ } }
-        }, (caught) => { setRemoteStatus("stale"); setActionMessage(sharedErrorMessage(caught)); setOwner({ ...capability, billId: "" }); });
+        }, (caught) => { if (cancelled || (recovery && window.location.hash !== openedFromHash)) return; setRemoteStatus("stale"); setActionMessage(sharedErrorMessage(caught)); setOwner({ ...capability, billId: "" }); });
       } else if (capability) { setOwner(capability); setRemoteStatus("stale"); }
     } catch {
       setActionMessage("เปิดข้อมูลใน browser ไม่สำเร็จ แต่คุณยังเริ่มบิลใหม่ได้");
     } finally {
       setReady(true);
     }
-  }, [recovery]);
+    return () => { cancelled = true; };
+  }, [recovery, joinedOwner]);
   useEffect(() => {
-    if (!ready || recovery) return;
+    if (!ready || recovery || joinedOwner) return;
     try {
       if (shouldPersistSession(started, session)) saveSession(window.localStorage, session, started);
       else clearSessionStorage(window.localStorage);
     } catch { setActionMessage("ไม่สามารถบันทึกข้อมูลใน browser นี้ได้"); }
-  }, [ready, started, session, recovery]);
+  }, [ready, started, session, recovery, joinedOwner]);
   /* eslint-enable react-hooks/set-state-in-effect */
   /* eslint-disable react-hooks/set-state-in-effect -- Remote snapshots can update the title while this client editor is open. */
   useEffect(() => { setTitleDraft(session.title); }, [session.title]);
@@ -170,14 +229,13 @@ export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerTok
     if (!owner?.billId) return;
     void reconnectRealtime(owner.billId);
     const onOffline = () => setRemoteStatus("offline");
-    const onOnline = () => { setRemoteStatus("connecting"); void refreshRemote(owner.billId); void reconnectRealtime(owner.billId); };
+    const onOnline = () => { setRemoteStatus("connecting"); void reconnectRealtime(owner.billId); };
     window.addEventListener("offline", onOffline); window.addEventListener("online", onOnline);
-    return () => { void subscriptionController.stop(); window.removeEventListener("offline", onOffline); window.removeEventListener("online", onOnline); };
+    return () => { remoteGeneration.current += 1; void subscriptionController.stop(); window.removeEventListener("offline", onOffline); window.removeEventListener("online", onOnline); };
   }, [owner?.billId, reconnectRealtime, refreshRemote, subscriptionController]);
 
   function reloadRemoteAndReconnect(billId: string) {
     setRemoteStatus("connecting");
-    void refreshRemote(billId);
     void reconnectRealtime(billId);
   }
 
@@ -208,7 +266,7 @@ export function OwnerApp({ recovery }: { recovery?: { publicId: string; ownerTok
     if (fileRef.current) fileRef.current.value = "";
   }
   function newBill() {
-    if (recovery) { clearQr(); router.push("/"); return; }
+    if (recovery || joinedOwner) { clearQr(); router.push("/"); return; }
     clearQr(); dismissToast(); rawDispatch({ type: "clear" }); setStarted(false); setOwner(null); setRemoteStatus("local");
     setPersonName(""); setReceiptTitle(""); setTitleDraft(emptySession().title); setFormError(""); setActionMessage(""); setManualCopyText("");
     try { clearSessionStorage(window.localStorage); window.localStorage.removeItem(OWNER_KEY); } catch { /* Local storage may be blocked. */ }

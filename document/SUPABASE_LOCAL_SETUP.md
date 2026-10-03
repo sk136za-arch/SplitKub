@@ -142,6 +142,73 @@ npx supabase db reset
 
 คำเตือน: `db reset` จะลบข้อมูลใน Supabase local ปัจจุบันทั้งหมด
 
+## วิธีอัปเดต Database Migration
+
+ใช้ขั้นตอนนี้เมื่อหน้าเว็บแจ้งว่า `ฐานข้อมูลบิลออนไลน์ยังไม่รองรับคนรวบรวมเงิน` หรือเมื่อมีไฟล์ใหม่ใน `supabase/migrations/`
+
+Migration ของโปรเจกต์จะถูกรันตามลำดับชื่อไฟล์ ปัจจุบันต้องมีอย่างน้อย:
+
+1. `202610030001_shared_bills.sql`
+2. `202610030002_settlement_routing.sql`
+3. `202610030003_shared_bill_capabilities.sql`
+
+### อัปเดต Supabase local โดยไม่ลบข้อมูล
+
+เปิด Docker Desktop และรันจาก root ของโปรเจกต์:
+
+```powershell
+cd C:\Users\sk136\Desktop\Work\SplitKub
+npx supabase status
+npx supabase migration up
+```
+
+`migration up` จะนำเฉพาะ migration ที่ยังไม่เคยรันไปใช้กับฐานข้อมูล local โดยไม่ตั้งใจล้างข้อมูลเดิม เมื่อสำเร็จให้ restart เว็บ:
+
+```powershell
+npm run dev
+```
+
+จากนั้น refresh หน้าและลองเลือกคนรวบรวมเงินอีกครั้ง
+
+### สร้างฐานข้อมูล local ใหม่
+
+ใช้เมื่อเป็นข้อมูลทดสอบที่ลบได้ หรือ migration history ของ local เสียจน `migration up` ทำงานไม่ได้:
+
+```powershell
+npx supabase db reset
+```
+
+คำเตือน: คำสั่งนี้ลบข้อมูลทั้งหมดใน Supabase local แล้วสร้าง schema ใหม่จาก migration ทุกไฟล์ ห้ามใช้กับฐานข้อมูล production
+
+### อัปเดต Supabase Cloud
+
+เชื่อม project ก่อน แล้วตรวจรายการ migration โดยยังไม่เขียนฐานข้อมูล:
+
+```powershell
+npx supabase login
+npx supabase link --project-ref <PROJECT_REF>
+npx supabase db push --dry-run
+```
+
+ตรวจว่า dry run แสดงเฉพาะ migration ที่คาดไว้ แล้วจึงรัน:
+
+```powershell
+npx supabase db push
+```
+
+อย่ารัน migration ซ้ำด้วยการคัดลอก SQL ไปวางใน Dashboard หาก project ใช้ CLI migration history อยู่ เพราะอาจทำให้ schema กับ `supabase_migrations.schema_migrations` ไม่ตรงกัน
+
+### ตรวจหลังอัปเดต
+
+รัน database tests และเปิดเว็บใหม่:
+
+```powershell
+npx supabase test db
+npm run dev
+```
+
+ถ้า Collector mode ยังแจ้งให้ทำ migration ให้ตรวจว่าหน้าเว็บชี้ไปยัง Supabase instance เดียวกับที่เพิ่งอัปเดต โดยดู `NEXT_PUBLIC_SUPABASE_URL` ใน `.env.local` แล้ว restart dev server ทุกครั้งหลังแก้ environment variables
+
 ## ปัญหาที่พบบ่อย
 
 ### `Cannot connect to the Docker daemon`

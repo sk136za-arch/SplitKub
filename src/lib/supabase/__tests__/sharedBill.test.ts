@@ -59,18 +59,22 @@ describe("private Realtime subscription lifecycle", () => {
     await expect(connected).resolves.toBeUndefined();
     reportStatus?.("CHANNEL_ERROR");
     expect(onError).toHaveBeenCalledOnce();
+    reportStatus?.("CLOSED");
+    reportStatus?.("SUBSCRIBED");
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onStatus).not.toHaveBeenCalledWith("CLOSED");
   });
 
   it("rejects initial CHANNEL_ERROR or timeout instead of reporting a live connection", async () => {
     let reportStatus: ((status: string) => void) | undefined;
     const connection = awaitRealtimeSubscribed((callback) => { reportStatus = callback; });
     reportStatus?.("CHANNEL_ERROR");
-    await expect(connection).rejects.toMatchObject({ code: "unavailable" });
+    await expect(connection).rejects.toMatchObject({ code: "realtime_unavailable" });
 
     vi.useFakeTimers();
     try {
       const timeout = awaitRealtimeSubscribed(() => {}, undefined, undefined, 50);
-      const rejected = expect(timeout).rejects.toMatchObject({ code: "unavailable" });
+      const rejected = expect(timeout).rejects.toMatchObject({ code: "realtime_unavailable" });
       await vi.advanceTimersByTimeAsync(50);
       await rejected;
     } finally { vi.useRealTimers(); }

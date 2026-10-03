@@ -7,9 +7,9 @@ import { calculateBill } from "@/lib/calculateBill";
 import { formatMoney } from "@/lib/money";
 import { participantLabels } from "@/lib/participantLabels";
 import { shouldApplyRemoteRevision } from "@/lib/sharedSnapshot";
-import { SharedSubscriptionController } from "@/lib/sharedSubscription";
+import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive } from "@/lib/sharedSubscription";
 import type { SplitSession } from "@/types/bill";
-import { claimSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation } from "@/hooks/sharedBillAdapter";
+import { claimSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import { SessionSummary } from "./SessionSummary";
 import { OwnerApp } from "./OwnerApp";
 
@@ -26,39 +26,100 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [pending, setPending] = useState(false);
   const [ownerRecovery, setOwnerRecovery] = useState<{ publicId: string; ownerToken: string } | null>(null);
+  const [joinedOwner, setJoinedOwner] = useState<SharedOpen | null>(null);
+  const [hashRevision, setHashRevision] = useState(0);
+  const openGeneration = useRef(0);
   const revisionSeen = useRef(-1);
   const reloadSequence = useRef(0);
+  const reloadInFlight = useRef<{ id: string; generation: number; dirty: boolean; promise: Promise<boolean> } | null>(null);
+  const subscribedGeneration = useRef(-1);
+  const subscriptionGeneration = useRef(0);
   const [subscriptionController] = useState(() => new SharedSubscriptionController(subscribeSharedBill));
 
-  const reload = useCallback(async (id: string) => {
-    const sequence = ++reloadSequence.current;
-    try {
-      const next = await refreshSharedBill(id);
-      if (sequence !== reloadSequence.current) return;
-      if (!shouldApplyRemoteRevision(revisionSeen.current, next.revision)) return;
-      revisionSeen.current = next.revision;
-      setSnapshot(next);
-      setError("");
-    } catch (caught) {
-      if (sequence === reloadSequence.current) {
-        setSyncStatus(navigator.onLine ? "stale" : "offline");
-        setError(sharedErrorMessage(caught));
-      }
+  // The callback intentionally coordinates mutable generation/request refs across async refreshes.
+  const reload = useCallback((id: string, generation = openGeneration.current): Promise<boolean> => {
+    if (generation !== openGeneration.current) return Promise.resolve(false);
+    if (reloadInFlight.current?.id === id && reloadInFlight.current.generation === generation) {
+      reloadInFlight.current.dirty = true;
+      return reloadInFlight.current.promise;
     }
+    const sequence = ++reloadSequence.current;
+    const request = { id, generation, dirty: false, promise: Promise.resolve(false) };
+    const promise = (async () => {
+      const refreshOnce = async () => {
+        try {
+          const next = await refreshSharedBill(id);
+          if (sequence !== reloadSequence.current || generation !== openGeneration.current) return false;
+          if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+            revisionSeen.current = next.revision;
+            setSnapshot(next);
+          }
+          setError("");
+          return true;
+        } catch (caught) {
+          if (sequence === reloadSequence.current && generation === openGeneration.current) {
+            setSyncStatus(navigator.onLine ? "stale" : "offline");
+            setError(sharedErrorMessage(caught));
+          }
+          return false;
+        }
+      };
+      let succeeded = false;
+      try {
+        succeeded = await refreshWithTrailingDirty(refreshOnce, () => request.dirty, () => { request.dirty = false; });
+      } finally {
+        if (reloadInFlight.current === request) reloadInFlight.current = null;
+      }
+      return succeeded;
+    })();
+    request.promise = promise;
+    reloadInFlight.current = request;
+    return promise;
   }, []);
-  const reconnectRealtime = useCallback((id: string) => subscriptionController.restart(id, {
-    onChange: () => { void reload(id); },
-    onError: (caught) => { setSyncStatus("stale"); setError(sharedErrorMessage(caught)); },
+  const reconnectRealtime = useCallback((id: string) => {
+    const openSessionGeneration = openGeneration.current;
+    const subscriptionToken = ++subscriptionGeneration.current;
+    subscribedGeneration.current = -1;
+    return subscriptionController.restart(id, {
+    onChange: () => { if (subscriptionToken === subscriptionGeneration.current && openSessionGeneration === openGeneration.current) void reload(id, openSessionGeneration); },
+    onError: (caught) => { if (subscriptionToken !== subscriptionGeneration.current || openSessionGeneration !== openGeneration.current) return; subscribedGeneration.current = -1; setSyncStatus("stale"); setError(sharedErrorMessage(caught)); },
     onStatus: (status) => {
-      if (status === "SUBSCRIBED") setSyncStatus(navigator.onLine ? "live" : "offline");
-      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setSyncStatus("stale");
+      if (subscriptionToken !== subscriptionGeneration.current || openSessionGeneration !== openGeneration.current) return;
+      if (status === "SUBSCRIBED") {
+        subscribedGeneration.current = subscriptionToken;
+        if (!navigator.onLine) { setSyncStatus("offline"); return; }
+        setSyncStatus("connecting");
+        void reload(id, openSessionGeneration).then((refreshed) => {
+          if (shouldMarkSubscriptionLive(refreshed, subscriptionToken, subscriptionGeneration.current, subscribedGeneration.current, openSessionGeneration === openGeneration.current)) setSyncStatus(navigator.onLine ? "live" : "offline");
+        });
+      } else {
+        subscribedGeneration.current = -1;
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setSyncStatus("stale");
+      }
     },
-  }), [reload, subscriptionController]);
+  });
+  }, [reload, subscriptionController]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      openGeneration.current += 1;
+      subscriptionGeneration.current += 1;
+      subscribedGeneration.current = -1;
+      reloadSequence.current += 1;
+      void subscriptionController.stop();
+      setOwnerRecovery(null); setJoinedOwner(null); setViewStatus("loading");
+      setHashRevision((revision) => revision + 1);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [subscriptionController]);
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++openGeneration.current;
+    const isCurrent = () => !cancelled && generation === openGeneration.current;
     /* eslint-disable react-hooks/set-state-in-effect -- Route and fragment changes require a fresh client-only load. */
-    setViewStatus("loading"); setError(""); setSnapshot(null); setBillId(""); setSelectedPersonId(""); setOwnerRecovery(null);
+    setViewStatus("loading"); setError(""); setSnapshot(null); setBillId(""); setSelectedPersonId(""); setOwnerRecovery(null); setJoinedOwner(null); setPending(false);
     revisionSeen.current = -1;
     /* eslint-enable react-hooks/set-state-in-effect */
     const capability = parseShareFragment(window.location.hash);
@@ -66,8 +127,9 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     if (!sharingIsAvailable()) { setViewStatus("error"); setError("การแชร์ออนไลน์ยังไม่พร้อมใช้งาน"); return; }
     if (capability.role === "owner") { setOwnerRecovery({ publicId, ownerToken: capability.token }); return; }
 
-    void openSharedBill(publicId, capability.token, "friend").then(async (opened) => {
-      if (cancelled) return;
+    void openSharedBill(publicId, capability.token).then((opened) => {
+      if (!isCurrent()) return;
+      if (opened.role === "owner") { setJoinedOwner(opened); return; }
       if (!shouldApplyRemoteRevision(revisionSeen.current, opened.snapshot.revision)) return;
       setBillId(opened.billId);
       revisionSeen.current = opened.snapshot.revision;
@@ -79,23 +141,26 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       setViewStatus("ready");
       setSyncStatus(navigator.onLine ? "connecting" : "offline");
     }, (caught) => {
-      if (!cancelled) { setViewStatus("error"); setError(sharedErrorMessage(caught)); }
+      if (isCurrent()) { setViewStatus("error"); setError(sharedErrorMessage(caught)); }
     });
 
     return () => {
       cancelled = true;
       reloadSequence.current += 1;
+      void subscriptionController.stop();
     };
-  }, [publicId, reload]);
+  }, [publicId, hashRevision, subscriptionController]);
 
   useEffect(() => {
     if (!billId || viewStatus !== "ready") return;
     void reconnectRealtime(billId);
     const onOffline = () => { setSyncStatus("offline"); setNotice("ออฟไลน์อยู่ การเลือกผู้ร่วมรายการจะใช้ได้เมื่อเชื่อมต่ออีกครั้ง"); };
-    const onOnline = () => { setSyncStatus("connecting"); setNotice(""); void reload(billId); void reconnectRealtime(billId); };
+    const onOnline = () => { setSyncStatus("connecting"); setNotice(""); void reconnectRealtime(billId); };
     window.addEventListener("offline", onOffline);
     window.addEventListener("online", onOnline);
     return () => {
+      subscriptionGeneration.current += 1;
+      subscribedGeneration.current = -1;
       void subscriptionController.stop();
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
@@ -105,7 +170,6 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   function reloadAndReconnect() {
     if (!billId) return;
     setSyncStatus("connecting");
-    void reload(billId);
     void reconnectRealtime(billId);
   }
 
@@ -119,36 +183,43 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
 
   async function choosePerson(participantId: string) {
     if (!participantId || !billId || pending || syncStatus === "offline") return;
+    const generation = openGeneration.current;
     setPending(true); setError(""); setNotice("");
     try {
       const next = await claimSharedParticipant(billId, participantId);
+      if (generation !== openGeneration.current) return;
       if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
         revisionSeen.current = next.revision;
         setSnapshot(next);
       }
       setSelectedPersonId(participantId);
       try { window.sessionStorage.setItem(`splitkub:friend:${publicId}`, participantId); } catch { /* Selection still works for this visit. */ }
-    } catch (caught) { setError(sharedErrorMessage(caught)); }
-    finally { setPending(false); }
+    } catch (caught) { if (generation === openGeneration.current) setError(sharedErrorMessage(caught)); }
+    finally { if (generation === openGeneration.current) setPending(false); }
   }
 
   async function toggle(receiptId: string, itemId: string, selected: boolean) {
     if (!canEdit || !snapshot) return;
+    const generation = openGeneration.current;
     setPending(true); setError(""); setNotice("");
     try {
       const next = await toggleSharedParticipation(billId, receiptId, itemId, selected, snapshot.revision);
+      if (generation !== openGeneration.current) return;
       if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
         revisionSeen.current = next.revision;
         setSnapshot(next);
       }
     } catch (caught) {
+      if (generation !== openGeneration.current) return;
       const message = sharedErrorMessage(caught);
       await reload(billId);
+      if (generation !== openGeneration.current) return;
       setNotice(message);
-    } finally { setPending(false); }
+    } finally { if (generation === openGeneration.current) setPending(false); }
   }
 
   if (ownerRecovery) return <OwnerApp recovery={ownerRecovery}/>;
+  if (joinedOwner) return <OwnerApp joinedOwner={joinedOwner}/>;
 
   return <main className="min-h-screen">
     <header className="border-b border-[#e9e4f7] bg-white/80"><div className="shell flex min-h-18 items-center justify-between py-4"><Link href="/" className="inline-flex min-h-11 items-center gap-2 text-xl font-black text-[#5331aa]"><Image src="/brand/splitkub-icon.png" width={44} height={44} alt="" className="h-11 w-11"/>SplitKub</Link><span className="rounded-full bg-[#f1ecff] px-3 py-2 text-xs font-bold text-[#6040ac]">บิลที่เพื่อนแชร์</span></div></header>

@@ -1,5 +1,71 @@
 import { describe, expect, it, vi } from "vitest";
-import { SharedSubscriptionController, type SharedSubscriptionCallbacks } from "../lib/sharedSubscription";
+import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive, type SharedSubscriptionCallbacks } from "../lib/sharedSubscription";
+
+describe("live subscription readiness", () => {
+  it("requires a successful canonical refresh and the current subscribed generation", () => {
+    expect(shouldMarkSubscriptionLive(true, 3, 3, 3)).toBe(true);
+    expect(shouldMarkSubscriptionLive(false, 3, 3, 3)).toBe(false);
+    expect(shouldMarkSubscriptionLive(true, 2, 3, 2)).toBe(false);
+    expect(shouldMarkSubscriptionLive(true, 3, 3, -1)).toBe(false);
+    expect(shouldMarkSubscriptionLive(true, 3, 4, 3)).toBe(false);
+  });
+
+  it("runs exactly one trailing canonical refresh for notifications during a fetch", async () => {
+    let markFetchStarted: (() => void) | undefined;
+    let finishFetch: (() => void) | undefined;
+    const fetchStarted = new Promise<void>((resolve) => { markFetchStarted = resolve; });
+    const fetchCanFinish = new Promise<void>((resolve) => { finishFetch = resolve; });
+    let dirty = false;
+    let dirtySignals = 0;
+    const markDirty = () => { dirty = true; dirtySignals += 1; };
+    let calls = 0;
+    const pending = refreshWithTrailingDirty(async () => {
+      calls += 1;
+      if (calls === 1) { markFetchStarted?.(); await fetchCanFinish; }
+      return true;
+    }, () => dirty, () => { dirty = false; });
+    await fetchStarted;
+    markDirty();
+    markDirty();
+    finishFetch?.();
+    await expect(pending).resolves.toBe(true);
+    expect(calls).toBe(2);
+    expect(dirtySignals).toBe(2);
+    expect(dirty).toBe(false);
+  });
+
+  it("waits for a third fetch when the trailing fetch fails and is dirtied again", async () => {
+    let dirty = false;
+    let calls = 0;
+    let markSecondFetchStarted: (() => void) | undefined;
+    let finishSecondFetch: (() => void) | undefined;
+    const secondFetchStarted = new Promise<void>((resolve) => { markSecondFetchStarted = resolve; });
+    let live = false;
+    const pending = refreshWithTrailingDirty(async () => {
+      calls += 1;
+      if (calls === 1) { dirty = true; return true; }
+      if (calls === 2) {
+        markSecondFetchStarted?.();
+        return new Promise<boolean>((resolve) => {
+          finishSecondFetch = () => { dirty = true; resolve(false); };
+        });
+      }
+      return true;
+    }, () => dirty, () => { dirty = false; }).then((succeeded) => {
+      live = shouldMarkSubscriptionLive(succeeded, 7, 7, 7);
+      return succeeded;
+    });
+    await secondFetchStarted;
+    expect(calls).toBe(2);
+    expect(live).toBe(false);
+    finishSecondFetch?.();
+    await expect(pending).resolves.toBe(true);
+    expect(calls).toBe(3);
+    expect(live).toBe(true);
+    expect(dirty).toBe(false);
+    expect(shouldMarkSubscriptionLive(true, 7, 7, 7, false)).toBe(false);
+  });
+});
 
 describe("shared realtime reconnect controller", () => {
   it("replaces a stale channel before opening one fresh channel and ignores old callbacks", async () => {

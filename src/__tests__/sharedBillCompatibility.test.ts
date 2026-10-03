@@ -7,7 +7,7 @@ vi.mock("../lib/supabase/client", () => ({
   sharedBillAvailable: () => true,
 }));
 
-import { applyOwnerAction, createSharedBill, mapSharedBillError } from "../lib/supabase/sharedBill";
+import { applyOwnerAction, createSharedBill, joinSharedBill, mapSharedBillError } from "../lib/supabase/sharedBill";
 
 function draft() {
   return { ...emptySession(), participants: [{ id: "a", name: "A", promptPay: "" }] };
@@ -31,6 +31,13 @@ beforeEach(() => {
 });
 
 describe("shared backend routing compatibility", () => {
+  it("keeps the authenticated RPC role when opening a friend-token URL", async () => {
+    mocks.rpc.mockResolvedValue({ data: { publicId: "public", billId: "bill", role: "owner", snapshot: oldSnapshot() }, error: null });
+    const opened = await joinSharedBill("public", "f".repeat(43));
+    expect(opened.role).toBe("owner");
+    expect(opened.snapshot.settlementMode).toBe("direct");
+  });
+
   it("maps a missing capability RPC to a migration-required error", () => {
     expect(mapSharedBillError({ code: "PGRST202", message: "Could not find the function" }).code).toBe("migration_required");
   });

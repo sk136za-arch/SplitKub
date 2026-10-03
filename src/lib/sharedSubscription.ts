@@ -11,6 +11,24 @@ export type SharedSubscriptionFactory = (
   onStatus: (status: string) => void,
 ) => Promise<() => void | Promise<void>>;
 
+export function shouldMarkSubscriptionLive(refreshSucceeded: boolean, callbackGeneration: number, activeGeneration: number, subscribedGeneration: number, sessionIsCurrent = true): boolean {
+  return refreshSucceeded && callbackGeneration === activeGeneration && subscribedGeneration === callbackGeneration && sessionIsCurrent;
+}
+
+/** Drains queued notifications; each extra fetch is caused by a dirty signal, never an automatic retry. */
+export async function refreshWithTrailingDirty(
+  refresh: () => Promise<boolean>,
+  isDirty: () => boolean,
+  clearDirty: () => void,
+): Promise<boolean> {
+  let succeeded = false;
+  do {
+    succeeded = await refresh();
+    if (!isDirty()) return succeeded;
+    clearDirty();
+  } while (true);
+}
+
 /** Serializes teardown/reconnect and ignores late callbacks from replaced channels. */
 export class SharedSubscriptionController {
   private generation = 0;

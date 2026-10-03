@@ -29,12 +29,14 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 - Added feature-flagged Supabase configuration, local Supabase config, pgTAP security assertions, environment template, deployment documentation, and `document/SUPABASE_LOCAL_SETUP.md` for Windows local/cloud setup.
 - Added an additive routing migration with owner-only revision-checked updates, same-bill collector FK, direct defaults for existing rows, and pgTAP validation/security assertions. The friend participation RPC is unchanged.
 - Added remote snapshot normalization only for old snapshots lacking both routing fields; partial routing snapshots are rejected. A separate additive capability RPC lets collector create/update fail with `migration_required` before writing to an older backend, and a post-write check refuses a downgraded collector response.
+- Hardened shared-link opening and Realtime lifecycle: a friend-token visit follows the role returned by the RPC; an existing owner gets an ephemeral owner workspace with no friend token saved as owner recovery. Fragment changes restart opening and invalidate late responses. Realtime channel removal is one-shot/non-reentrant, terminal subscription errors use `realtime_unavailable`, and both owner/friend fetch a canonical snapshot after `SUBSCRIBED` with stale-generation guards.
 
 ## Architecture Decisions
 
 - One session uses one currency: THB or USD. Money remains an integer in satang or cents; no exchange-rate conversion is performed.
 - Friend access is intentionally trust-based. A link holder can select another participant name, but cannot change receipt structure, prices, participants, or payers.
 - Realtime is only a change notification. Clients always refetch a validated canonical snapshot and apply revisions monotonically.
+- A successful Realtime subscription also triggers a canonical refresh to close the gap between initial link opening and joining the channel; old-channel callbacks and late fetches cannot replace a newer link or connection generation.
 - QR images remain browser-memory-only and are never uploaded. PromptPay is persisted per participant.
 - Shared mode uses only a client-safe Supabase publishable key plus RLS/RPCs; no service-role or secret key is shipped to the browser.
 - Shared data expires 90 days after creation, independent of later edits.
@@ -43,11 +45,11 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 
 ## Tests
 
-`npm run test` passed: 20 files, 110 tests. Coverage includes multi-receipt arithmetic and invariants, deterministic direct and gross collector routing, consistent exact-rational payment display across Summary/copy/PNG (fractional, exact, multi-item, endpoint/order preservation, no-decrease behavior, collector reimbursement, person-card display-vs-ledger amounts), ledger regressions, old/partial remote snapshot compatibility, capability preflight and downgrade detection, destination-aware share and QR rules, invalid references/payers, V1/V2→V3 recovery, PromptPay preservation and explicit resolution, token-fragment parsing, Supabase configuration/error mapping, monotonic snapshots, Realtime subscription/reconnection cleanup, receipt payer labels, clipboard/image sharing, mascot fallback, and toast behavior.
+`npm run test` passed: 23 files, 121 tests. Coverage includes multi-receipt arithmetic and invariants, deterministic direct and gross collector routing, consistent exact-rational payment display across Summary/copy/PNG (fractional, exact, multi-item, endpoint/order preservation, no-decrease behavior, collector reimbursement, person-card display-vs-ledger amounts), ledger regressions, old/partial remote snapshot compatibility, capability preflight and downgrade detection, destination-aware share and QR rules, actual owner role without token persistence, invalid references/payers, V1/V2→V3 recovery, PromptPay preservation and explicit resolution, token-fragment parsing, distinct shared-link/expiry/Realtime errors, monotonic snapshots, one-shot/non-reentrant Realtime channel cleanup, dirty-notification refresh draining, stale subscription suppression, receipt payer labels, clipboard/image sharing, mascot fallback, and toast behavior.
 
 ## Validation
 
-- `npm run test`: passed, 110/110 tests.
+- `npm run test`: passed, 121/121 tests.
 - `npm run lint`: passed.
 - `npx tsc --noEmit`: passed.
 - `npm run build`: passed with Next.js 16.3.7; `/` is static and `/b/[publicId]` is dynamic.

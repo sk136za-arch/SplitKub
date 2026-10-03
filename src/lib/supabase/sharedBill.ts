@@ -23,7 +23,7 @@ export interface SharedBillJoinResponse extends SharedBillSnapshot {
 export type SharedBillErrorCode =
   | "disabled" | "not_configured" | "auth_required" | "invalid_token" | "unavailable"
   | "revision_conflict" | "participant_claimed" | "participant_not_claimed" | "owner_cannot_claim"
-  | "item_not_in_receipt" | "validation" | "migration_required" | "rate_limited" | "network" | "unknown";
+  | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "rate_limited" | "network" | "unknown";
 
 export class SharedBillError extends Error {
   constructor(readonly code: SharedBillErrorCode, message: string) {
@@ -176,21 +176,32 @@ export async function subscribeToSharedBill(
 ): Promise<() => Promise<void>> {
   const client = getClient();
   await ensureAnonymousSession(client);
+  let active = true;
   const channel: RealtimeChannel = client
     .channel(`shared-bill:${billId}`, { config: { private: true } })
     .on("broadcast", { event: "shared_bill_changed" }, ({ payload }: { payload: { revision?: unknown } }) => {
-      if (typeof payload?.revision === "number" && Number.isSafeInteger(payload.revision)) onChange(payload.revision);
+      if (active && typeof payload?.revision === "number" && Number.isSafeInteger(payload.revision)) onChange(payload.revision);
     });
+  let cleanupPromise: Promise<void> | null = null;
+  const cleanupOnce = (): Promise<void> => {
+    if (!cleanupPromise) {
+      active = false;
+      // Defer the remove call until after the memoized promise is assigned: a
+      // synchronous CLOSED callback from removeChannel must not reenter cleanup.
+      cleanupPromise = Promise.resolve().then(() => client.removeChannel(channel)).then(() => {});
+    }
+    return cleanupPromise;
+  };
   try {
     await awaitRealtimeSubscribed((onState) => channel.subscribe(onState), (error) => {
-      void client.removeChannel(channel);
+      void cleanupOnce().catch(() => { /* Preserve the original Realtime failure. */ });
       onError?.(error);
     }, onStatus);
   } catch (error) {
-    await client.removeChannel(channel);
+    try { await cleanupOnce(); } catch { /* Preserve the original Realtime failure. */ }
     throw error;
   }
-  return async () => { await client.removeChannel(channel); };
+  return cleanupOnce;
 }
 
 /** Resolve only once the channel is actually subscribed; post-connect failures still reach onError. */
@@ -201,22 +212,24 @@ export function awaitRealtimeSubscribed(
   timeoutMs = 12_000,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    let settled = false;
+    let phase: "connecting" | "subscribed" | "terminal" = "connecting";
     const timeout = setTimeout(() => fail("Live updates did not connect. Refresh the bill to get the latest changes."), timeoutMs);
     const fail = (reason: string) => {
-      const error = new SharedBillError("unavailable", reason);
-      try { onError?.(error); } catch { /* Status reporters must not suppress subscription cleanup. */ }
-      if (settled) return;
-      settled = true;
+      if (phase === "terminal") return;
+      const beforeSubscribe = phase === "connecting";
+      phase = "terminal";
       clearTimeout(timeout);
-      reject(error);
+      const error = new SharedBillError("realtime_unavailable", reason);
+      try { onError?.(error); } catch { /* Status reporters must not suppress subscription cleanup. */ }
+      if (beforeSubscribe) reject(error);
     };
     try {
       subscribe((status) => {
+        if (phase === "terminal") return;
         try { onStatus?.(status); } catch { /* UI status callbacks are non-critical. */ }
         if (status === "SUBSCRIBED") {
-          if (settled) return;
-          settled = true;
+          if (phase !== "connecting") return;
+          phase = "subscribed";
           clearTimeout(timeout);
           resolve();
         } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
