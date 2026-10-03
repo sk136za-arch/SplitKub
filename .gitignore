@@ -8,3 +8,7 @@ coverage
 next-env.d.ts
 next.config.ts
 recovery_code_vercel
+agent
+document/*
+supabase/.branches/
+supabase/.temp/

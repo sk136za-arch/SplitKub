@@ -2,62 +2,82 @@
 
 ## Task
 
-Make SplitKub sharing payment-first, then add a dismissible success toast and a recognizable mascot brand across the app and summary PNG.
+Implement SplitKub MVP 1.1 plus settlement routing: multiple receipts, one payer per receipt, paid/owed/net summaries, direct or collector payment routes, anonymous shared bills, friend participation editing, private Realtime updates, and 90-day retention.
 
 ## Result
 
-The payment panel precedes the sharing actions. THB text copying requires a valid PromptPay number; image sharing requires an uploaded QR for either currency. Successful text copying now raises an accessible three-second toast. The PNG includes the bill total, per-person totals, currency, uploaded QR, a valid PromptPay number when applicable, and the mascot brand mark.
+SplitKub now supports multiple receipts in one split session. Each receipt has its own payer and items, while the summary derives how much every participant paid, owes, and should receive or pay. The owner can select direct net-based routes or a collector who receives every noncollector's gross owed amount and reimburses every noncollector payer's gross paid amount, with receipt breakdowns. Owners can create capability links when Supabase is configured; friends open a single trust-based link, select their name, and update only that participant's item assignments. Local-only mode remains usable without Supabase.
 
 ## Implementation Plan
 
-Extract payment readiness and share text from the page, add clipboard fallbacks, render the PNG with browser Canvas, and connect Web Share file support to a download fallback. Verify mobile-relevant failure paths and existing bill behavior.
-
-Add a reusable toast whose timer restarts on each successful copy and cleans up when dismissed or unmounted. Use the generated full-body mascot on the landing page and summary image, and its transparent bust crop for the compact header and browser icons.
+Extend the domain and calculation engine first, migrate V1 local data without destructive writes, add normalized Supabase storage/RPC/RLS/Realtime infrastructure, then replace the single-bill UI with owner and friend flows. Preserve integer money, deterministic remainder allocation, QR browser-only behavior, clipboard/image fallbacks, mascot branding, and mobile-first accessibility.
 
 ## Changes Made
 
-- Added `src/lib/share.ts` for sharing eligibility, normalized PromptPay text, clipboard fallback, and share cancellation detection.
-- Added `src/lib/summaryImage.ts` for a 1080px branded PNG with dynamic height, duplicate-name labels, readable payment section, and uploaded QR.
-- Moved sharing controls below the payment inputs. Disabled controls explain their required input; the copy failure path shows selectable text.
-- The PNG is prepared after a 200ms quiet period and cached by currency, PromptPay, QR URL, total, and rendered participant fields. The share click uses only an image whose cache key still matches the current bill.
-- When native file sharing is available, preparation creates the actual PNG `File` and checks it with `navigator.canShare`; the button label reflects that result. The click immediately invokes `navigator.share` with the prepared file. Otherwise, the download path uses only the Blob. Cancelling the native share dialog does not trigger a download.
-- Replacing a QR first revokes and clears the previous image, so an invalid type or oversized replacement cannot leave a stale payment QR active. QR decode/export failures expose a retryable accessible status instead of creating an incomplete image. Temporary download object URLs are revoked.
-- Added focused tests for payment rules, share text, browser clipboard paths, QR decode/export, and dynamic image height.
-- Added `SuccessToast` with a three-second resettable timer, keyboard-accessible close button, polite live status, and mobile safe-area placement. Copy errors and manual-copy text remain inline.
-- Added transparent mascot assets in `public/brand/`, a compact header icon, a reserved-size landing image, and Next.js icon metadata.
-- The summary renderer loads the QR and mascot together; a mascot failure falls back to the text wordmark, while a QR failure still prevents exporting an incomplete payment image.
+- Added `SplitSession`, receipts, receipt payers, participant PromptPay, structural session actions, and deterministic paid/owed/net calculation with conservation invariants.
+- Added V3 local persistence and copy-on-write V1/V2 migration to direct mode. Older keys remain until a server-confirmed V3 snapshot is safely stored.
+- Preserved legacy global PromptPay in a dedicated pending record. The owner must explicitly assign it to a participant or discard it before creating a share link.
+- Added owner multi-receipt editing, payer selection, receipt-specific item splitting, paid/owed/net summary, receipt breakdowns, and per-recipient PromptPay.
+- Added deterministic direct transfers, collector gross collection/reimbursement transfers, destination-aware PromptPay and QR sharing, owner routing settings, and friend-personalized transfer views.
+- Added a shared exact-rational display layer for Summary, route rows, copied text, and PNG. It preserves every ledger route's endpoints, order, and kind; direct payer rounding deltas go only on that payer's last existing outgoing route, while collector collections use max(ledger amount, ceiling of aggregate exact owed). No displayed payment falls below its ledger amount; reimbursements and stored/calculated paid/owed/net values stay unchanged.
+- Added `/b/[publicId]` using the Next.js 16 async params convention. Capability secrets remain in URL fragments rather than paths or query parameters.
+- Added Supabase anonymous auth, normalized private tables, hashed owner/friend tokens, fixed-search-path SECURITY DEFINER RPCs, least-privilege grants/RLS, revision checking, receipt-scoped participation updates, private Realtime policy, and daily 90-day expiry cleanup.
+- Added a serialized Realtime subscription controller that cleans up old channels, rejects stale callbacks, reconnects after manual refresh/online recovery, and reports live only after `SUBSCRIBED`.
+- Updated copy text and PNG rendering for receipts, receipt payers, paid/owed/net totals, PromptPay recipients, and an explicitly selected QR recipient when several people must receive money. QR choices are tied to the current transfer-destination set; only a sole actual destination is auto-selected, never the collector by default.
+- PNG person cards now show rounded `ต้องโอน` / `จะรับ` instructions from the same display transfer rows as the route list; exact ledger net remains secondary and explicitly labeled `ยอดสุทธิในบัญชี`.
+- THB sessions with a valid result and no transfer destinations can copy the no-transfers summary without requiring PromptPay; QR image sharing remains disabled when there is nobody to receive money.
+- Added feature-flagged Supabase configuration, local Supabase config, pgTAP security assertions, environment template, deployment documentation, and `document/SUPABASE_LOCAL_SETUP.md` for Windows local/cloud setup.
+- Added an additive routing migration with owner-only revision-checked updates, same-bill collector FK, direct defaults for existing rows, and pgTAP validation/security assertions. The friend participation RPC is unchanged.
+- Added remote snapshot normalization only for old snapshots lacking both routing fields; partial routing snapshots are rejected. A separate additive capability RPC lets collector create/update fail with `migration_required` before writing to an older backend, and a post-write check refuses a downgraded collector response.
 
 ## Architecture Decisions
 
-- QR images remain in browser memory, as in MVP 1. The PNG is generated locally after payment inputs settle and is never uploaded to a server.
-- THB text copying is enabled only for a valid PromptPay number. Uploaded-QR-only bills are shared as an image because plain text cannot include the QR.
-- USD image sharing uses the uploaded QR and never displays a PromptPay number.
+- One session uses one currency: THB or USD. Money remains an integer in satang or cents; no exchange-rate conversion is performed.
+- Friend access is intentionally trust-based. A link holder can select another participant name, but cannot change receipt structure, prices, participants, or payers.
+- Realtime is only a change notification. Clients always refetch a validated canonical snapshot and apply revisions monotonically.
+- QR images remain browser-memory-only and are never uploaded. PromptPay is persisted per participant.
+- Shared mode uses only a client-safe Supabase publishable key plus RLS/RPCs; no service-role or secret key is shipped to the browser.
+- Shared data expires 90 days after creation, independent of later edits.
+- Direct routes use stable participant-order greedy debtor/creditor pairing; no globally minimal transfer count is claimed. Collector routes are gross and intentionally do not net. Transfer lists are derived and never persisted.
+- Display route amounts may be one or more minor units above the ledger to avoid showing less than exact rational debt. The difference cannot add, remove, reorder, or retarget a route; payment instructions use displayed amounts while the paid/owed/net ledger remains available separately. The image cache includes item split inputs so a changed raw fraction invalidates the image.
 
 ## Tests
 
-`npm run test` passed: 9 files, 49 tests. Tests cover THB/USD payment readiness, duplicate participant labels, compact PromptPay text, Clipboard API/legacy/manual paths, cancellation, native file-share capability checks, canvas size limits, cache-key invalidation, QR decode failure, QR drawing/export, mascot failure fallback, and toast timer reset/cleanup.
+`npm run test` passed: 20 files, 110 tests. Coverage includes multi-receipt arithmetic and invariants, deterministic direct and gross collector routing, consistent exact-rational payment display across Summary/copy/PNG (fractional, exact, multi-item, endpoint/order preservation, no-decrease behavior, collector reimbursement, person-card display-vs-ledger amounts), ledger regressions, old/partial remote snapshot compatibility, capability preflight and downgrade detection, destination-aware share and QR rules, invalid references/payers, V1/V2→V3 recovery, PromptPay preservation and explicit resolution, token-fragment parsing, Supabase configuration/error mapping, monotonic snapshots, Realtime subscription/reconnection cleanup, receipt payer labels, clipboard/image sharing, mascot fallback, and toast behavior.
 
 ## Validation
 
-`npm run lint`, `npm run build`, and `git diff --check` passed. The build completed with Next.js 16.3.7. The line-ending notices from Git on Windows are non-failing warnings.
+- `npm run test`: passed, 110/110 tests.
+- `npm run lint`: passed.
+- `npx tsc --noEmit`: passed.
+- `npm run build`: passed with Next.js 16.3.7; `/` is static and `/b/[publicId]` is dynamic.
+- `git diff --check`: passed; Git emitted only non-failing Windows line-ending warnings.
+- HTTP smoke checks returned 200 for `/` and `/b/<publicId>`.
 
 ## Review Findings
 
-The previous share button only attempted Web Share text or secure-context Clipboard API and did not include the uploaded QR. The new flow includes the payment method and remains usable over local HTTP through legacy/manual copy and PNG download.
+Independent test and final PR review found no remaining P0/P1/P2 issues. Corrective reviews fixed unsafe storage hydration, uncertain legacy PromptPay ownership, premature V1 retirement, Realtime status/recovery, stale revision responses, missing receipt-payer labels, and ambiguous QR ownership.
 
 ## Problems Found and Fixed
 
-The first test run exposed Vitest's lack of the Next.js `@/` path alias for the new library modules; imports were changed to relative paths. A duplicate-name test expectation was aligned with the project's existing numbered label format.
+- Guarded localStorage access so restricted storage cannot leave the app stuck loading.
+- Made remote snapshot application monotonic and structural owner writes revision-checked.
+- Persisted server-confirmed V3 data synchronously before removing compatible V1/V2 copies.
+- Required explicit assignment/discard of migrated PromptPay so payment data cannot silently move to the wrong participant or disappear.
+- Replaced one-shot Realtime subscription handling with serialized teardown/reconnect and stale-callback filtering.
+- Added receipt payer and selected QR owner labels to generated images.
 
 ## Remaining Concerns
 
-Native share dialogs and mobile download behavior depend on the device/browser and have not yet been exercised on a physical phone. PNG rendering was tested with a mocked canvas and QR, and should receive an on-device visual check.
-The toast and brand layout should also receive a physical mobile visual check, especially at 375px and with the software keyboard open.
+- The SQL migrations and pgTAP security tests were not executed. The installed Supabase CLI could not write its telemetry file under the sandboxed user profile, and Docker Engine access was denied; SQL was reviewed statically only.
+- Anonymous auth, RPCs, private Realtime, expiry cleanup, and two-browser collaboration still require an end-to-end test against a configured Supabase project.
+- Physical mobile viewport, native share dialog, QR download, and live reconnect behavior were not exercised on a real device because no browser automation surface was available.
+- The share feature remains disabled until the documented Supabase settings and environment variables are configured.
 
 ## Files Changed
 
-`src/app/page.tsx`, `src/app/globals.css`, `src/app/layout.tsx`, `src/components/SuccessToast.tsx`, `src/lib/share.ts`, `src/lib/summaryImage.ts`, `src/__tests__/share.test.ts`, `src/__tests__/successToast.test.ts`, `public/brand/splitkub-mascot.png`, `public/brand/splitkub-icon.png`, and this summary.
+Core changes include `src/types/bill.ts`, `src/lib/calculateBill.ts`, `src/lib/billState.ts`, `src/lib/storage.ts`, owner/friend UI components, shared adapters/controllers, `src/lib/supabase/`, `supabase/`, sharing/image utilities, tests, `.env.example`, `README.md`, and package dependency files.
 
 ## Final Status
 
-Implementation and repository checks complete. No commit or deployment was made.
+Implementation and local repository validation are complete. Live Supabase deployment/configuration and physical-device QA remain required before production release. No commit or deployment was made.

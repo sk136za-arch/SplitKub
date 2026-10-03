@@ -1,0 +1,14 @@
+project_id = "splitkub"
+
+[api]
+schemas = ["public", "graphql_public", "api"]
+extra_search_path = ["public", "extensions"]
+
+[auth]
+enable_signup = true
+enable_anonymous_sign_ins = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://localhost:3000"]
+
+[db.seed]
+enabled = false

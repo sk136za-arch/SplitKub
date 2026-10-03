@@ -27,6 +27,7 @@ button:disabled { cursor: not-allowed; }
 .split-chip { min-width: 0; overflow-wrap: anywhere; white-space: normal; text-align: left; }
 .split-action { min-height: 44px; padding: 8px 10px; font-weight: 700; }
 .split-item-name { min-width: 0; overflow-wrap: anywhere; }
+.wrap-anywhere { overflow-wrap: anywhere; }
 .error { color: #ae3552; font-size: .9rem; }
 .success { color: #327557; font-size: .9rem; }
 .matrix { width: 100%; border-collapse: collapse; }

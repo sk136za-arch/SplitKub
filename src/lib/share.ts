@@ -1,10 +1,25 @@
-import type { BillResult } from "./calculateBill";
+import { settlementDestinations, type BillResult, type SessionResult } from "./calculateBill";
 import { formatMoney } from "./money";
 import { participantLabels } from "./participantLabels";
 import { isValidPromptPay } from "./promptpay";
-import type { Currency } from "../types/bill";
+import { displayPaymentTotals, summaryTransferRows } from "./summaryTransferPresentation";
+import type { Currency, SplitSession } from "../types/bill";
 
 export const SHARE_TITLE = "Dinner 🍻";
+
+export type QrRecipientSelection = { destinationKey: string; participantId: string };
+
+export function qrDestinationKey(destinationIds: string[]): string {
+  return JSON.stringify(destinationIds);
+}
+
+/** A saved QR recipient is valid only for the exact current destination set. */
+export function resolveQrRecipient(destinationIds: string[], selection: QrRecipientSelection | null): string {
+  if (selection?.destinationKey === qrDestinationKey(destinationIds) && destinationIds.includes(selection.participantId)) {
+    return selection.participantId;
+  }
+  return destinationIds.length === 1 ? destinationIds[0] : "";
+}
 
 export function normalizedPromptPay(value: string): string {
   return value.replace(/[\s-]/g, "");
@@ -29,6 +44,53 @@ export function buildShareText(result: BillResult, currency: Currency, promptPay
   if (currency === "THB" && isValidPromptPay(promptPay)) {
     lines.push("", `PromptPay: ${normalizedPromptPay(promptPay)}`);
   } else if (currency === "USD") {
+    lines.push("", "ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน");
+  }
+  return lines.join("\n");
+}
+
+export function sessionSharingAvailability(result: SessionResult | null, session: SplitSession, hasQr: boolean, qrReceiverId = "") {
+  const receivers = result ? settlementDestinations(result, session) : [];
+  const qrReceiverIsKnown = receivers.includes(qrReceiverId) || (receivers.length === 1 && !qrReceiverId);
+  return {
+    canCopy: Boolean(result && session.currency === "THB" && (receivers.length === 0 || receivers.every((id) => isValidPromptPay(session.participants.find((person) => person.id === id)?.promptPay ?? "")))),
+    canShareImage: Boolean(result && hasQr && receivers.length > 0 && qrReceiverIsKnown),
+  };
+}
+
+export function buildSessionShareText(result: SessionResult, session: SplitSession): string {
+  const labels = participantLabels(session.participants);
+  const displayTransfers = summaryTransferRows(session, result);
+  const paymentTotals = displayPaymentTotals(session.participants.map((person) => person.id), displayTransfers);
+  const lines = [
+    session.title,
+    `ยอดรวม: ${formatMoney(result.total, session.currency)}`,
+    "",
+    "ใบเสร็จ",
+    ...result.receipts.map((receipt) => `${receipt.title} · จ่ายโดย ${labels.get(receipt.paidByParticipantId)}: ${formatMoney(receipt.total, session.currency)}`),
+    "",
+    "ยอดที่ต้องโอนและรับ",
+    ...paymentTotals.map((person) => `${labels.get(person.participantId)}: ต้องโอน ${formatMoney(person.outgoing, session.currency)} · จะรับ ${formatMoney(person.incoming, session.currency)}`),
+    "",
+    "ยอดสุทธิรายคน",
+    ...result.people.map((person) => `${labels.get(person.participantId)}: จ่ายไป ${formatMoney(person.paid, session.currency)} · ส่วนที่หาร ${formatMoney(person.owed, session.currency)} · ${person.net > 0 ? "รับคืน" : person.net < 0 ? "ต้องจ่าย" : "พอดี"} ${formatMoney(Math.abs(person.net), session.currency)}`),
+  ];
+  lines.push("", session.settlementMode === "collector" ? "เส้นทางโอนผ่านคนรวบรวมเงิน" : "เส้นทางโอนตรง");
+  if (displayTransfers.length === 0) lines.push("ไม่มีรายการโอนเงิน");
+  for (const transfer of displayTransfers) {
+    lines.push(`${labels.get(transfer.fromParticipantId)} → ${labels.get(transfer.toParticipantId)}: ${formatMoney(transfer.amount, session.currency)}`);
+    if (transfer.kind === "reimbursement") {
+      for (const receipt of transfer.receiptBreakdown) lines.push(`  คืน ${receipt.receiptTitle}: ${formatMoney(receipt.amount, session.currency)}`);
+    }
+  }
+  const receivers = settlementDestinations(result, session);
+  if (session.currency === "THB" && receivers.length > 0) {
+    lines.push("", "ช่องทางรับเงิน");
+    for (const id of receivers) {
+      const promptPay = session.participants.find((person) => person.id === id)?.promptPay ?? "";
+      if (isValidPromptPay(promptPay)) lines.push(`${labels.get(id)} · PromptPay: ${normalizedPromptPay(promptPay)}`);
+    }
+  } else if (session.currency === "USD" && receivers.length > 0) {
     lines.push("", "ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน");
   }
   return lines.join("\n");

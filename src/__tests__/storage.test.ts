@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyBill } from "../lib/billState";
-import { clearBillStorage, loadBill, loadBillSafely, saveBill, shouldPersistBill, STORAGE_KEY } from "../lib/storage";
+import { clearBillStorage, loadBill, loadBillSafely, resolveStorageSafely, saveBill, shouldPersistBill, STORAGE_KEY } from "../lib/storage";
 
 describe("storage", () => {
   it("restores the currency and bill", () => {
@@ -38,5 +38,6 @@ describe("storage", () => {
   });
   it("handles a localStorage accessor that throws", () => {
     expect(loadBillSafely(() => { throw new DOMException("Blocked", "SecurityError"); })).toBeNull();
+    expect(resolveStorageSafely(() => { throw new DOMException("Blocked", "SecurityError"); })).toBeNull();
   });
 });
