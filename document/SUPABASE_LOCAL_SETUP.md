@@ -91,7 +91,7 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<ใส่ Publishable key หรือ ano
 npx supabase test db
 ```
 
-คำสั่งนี้จะรัน pgTAP ทุกไฟล์ใน `supabase/tests/` เพื่อตรวจ RLS, grants, RPC security, collector validation, capability negotiation, Realtime policy และ scheduled expiry cleanup
+คำสั่งนี้จะรัน pgTAP ทุกไฟล์ใน `supabase/tests/` เพื่อตรวจ RLS, grants, RPC security, collector validation, capability negotiation, การเลือกชื่อซ้ำ, Realtime policy และ scheduled expiry cleanup
 
 ### 6. เปิด SplitKub
 
@@ -110,7 +110,7 @@ npm run dev
 2. เพิ่มคน ใบเสร็จ รายการ และเลือกคนออกเงินให้ครบ
 3. กดสร้างลิงก์ให้เพื่อน
 4. เปิด Friend link ใน Incognito หรือ browser อีก profile
-5. เลือกชื่อตัวเองและติ๊กรายการ
+5. เลือกชื่อตัวเองและติ๊กรายการ ลองเปิดลิงก์บนอีกอุปกรณ์เพื่อเลือกชื่อเดียวกันได้ (แต่ละอุปกรณ์จำชื่อที่เลือกแยกกันใน sessionStorage)
 6. ตรวจว่าหน้าเจ้าของอัปเดตผ่าน Realtime
 7. ลองเปิดลิงก์ผิดหรือเอา fragment token ออกและตรวจว่าระบบปฏิเสธ
 
@@ -144,13 +144,15 @@ npx supabase db reset
 
 ## วิธีอัปเดต Database Migration
 
-ใช้ขั้นตอนนี้เมื่อหน้าเว็บแจ้งว่า `ฐานข้อมูลบิลออนไลน์ยังไม่รองรับคนรวบรวมเงิน` หรือเมื่อมีไฟล์ใหม่ใน `supabase/migrations/`
+ใช้ขั้นตอนนี้เมื่อหน้าเว็บแจ้งว่าฐานข้อมูลยังไม่รองรับฟีเจอร์ล่าสุด หรือเมื่อมีไฟล์ใหม่ใน `supabase/migrations/`
 
 Migration ของโปรเจกต์จะถูกรันตามลำดับชื่อไฟล์ ปัจจุบันต้องมีอย่างน้อย:
 
 1. `202610030001_shared_bills.sql`
 2. `202610030002_settlement_routing.sql`
 3. `202610030003_shared_bill_capabilities.sql`
+4. `202610030004_unlocked_participant_selection.sql`
+5. `202610040001_selection_bound_friend_participation.sql`
 
 ### อัปเดต Supabase local โดยไม่ลบข้อมูล
 
@@ -255,7 +257,7 @@ npx supabase db reset
 2. เปิด Anonymous Sign-ins
 3. เพิ่ม `api` ใน Exposed schemas
 4. ตั้ง Realtime ให้ไม่อนุญาต public channels
-5. เชื่อม CLI และส่ง migration ทั้ง 3 ไฟล์ตามลำดับ (001 shared bills → 002 settlement routing → 003 capabilities) ก่อนเปิดใช้ client ที่เลือกคนรวบรวมเงิน
+5. เชื่อม CLI และส่ง migration ทั้ง 5 ไฟล์ตามลำดับ (001 shared bills → 002 settlement routing → 003 capabilities → 004 unlocked participant selection → 005 tab-bound participation) ก่อนเปิดใช้ client รุ่นล่าสุด
 
 ```powershell
 npx supabase login

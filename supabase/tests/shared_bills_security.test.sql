@@ -22,10 +22,10 @@ select ok(
 );
 
 select ok(
-  (select count(*) = 6 and bool_and(p.prosecdef) and bool_and(p.proconfig @> array['search_path=""'])
+  (select count(*) = 8 and bool_and(p.prosecdef) and bool_and(p.proconfig @> array['search_path=""'])
    from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'api'),
-  'every exposed API function is SECURITY DEFINER with an empty fixed search_path'
+  'all eight exposed API functions are SECURITY DEFINER with an empty fixed search_path'
 );
 
 select ok(to_regprocedure('api.set_shared_participation(uuid,text,text,boolean,bigint)') is not null,

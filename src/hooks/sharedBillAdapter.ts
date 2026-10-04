@@ -1,5 +1,5 @@
 import {
-  applyOwnerAction, claimParticipant, createSharedBill, fetchSharedBill, joinSharedBill,
+  applyOwnerAction, selectParticipant, createSharedBill, fetchSharedBill, joinSharedBill,
   parseSharedBillFragment, setSharedParticipation, sharedBillAvailable, subscribeToSharedBill,
   type SharedBillCreateResponse, type SharedBillJoinResponse,
 } from "@/lib/supabase/sharedBill";
@@ -17,9 +17,9 @@ export function openSharedBill(publicId: string, token: string, mode?: "friend" 
 }
 export function createSharedSession(session: SplitSession): Promise<SharedCreated> { return createSharedBill(session); }
 export async function refreshSharedBill(billId: string): Promise<SplitSession> { return (await fetchSharedBill(billId)).snapshot; }
-export async function claimSharedParticipant(billId: string, participantId: string): Promise<SplitSession> { return (await claimParticipant(billId, participantId)).snapshot; }
-export function toggleSharedParticipation(billId: string, receiptId: string, itemId: string, selected: boolean, expectedRevision: number): Promise<SplitSession> {
-  return setSharedParticipation(billId, receiptId, itemId, selected, expectedRevision);
+export async function selectSharedParticipant(billId: string, participantId: string): Promise<SplitSession> { return (await selectParticipant(billId, participantId)).snapshot; }
+export function toggleSharedParticipation(billId: string, receiptId: string, itemId: string, participantId: string, selected: boolean, expectedRevision: number): Promise<SplitSession> {
+  return setSharedParticipation(billId, receiptId, itemId, participantId, selected, expectedRevision);
 }
 export function saveSharedOwnerAction(billId: string, revision: number, action: SessionAction): Promise<SplitSession> {
   return applyOwnerAction(billId, revision, action);

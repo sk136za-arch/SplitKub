@@ -22,7 +22,7 @@ export interface SharedBillJoinResponse extends SharedBillSnapshot {
 
 export type SharedBillErrorCode =
   | "disabled" | "not_configured" | "auth_required" | "invalid_token" | "unavailable"
-  | "revision_conflict" | "participant_claimed" | "participant_not_claimed" | "owner_cannot_claim"
+  | "revision_conflict" | "participant_not_claimed" | "owner_cannot_claim"
   | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "rate_limited" | "network" | "unknown";
 
 export class SharedBillError extends Error {
@@ -50,8 +50,8 @@ export function mapSharedBillError(error: unknown): SharedBillError {
   if (matched("REVISION_CONFLICT") || code === "40001") return new SharedBillError("revision_conflict", "This bill changed elsewhere. Refresh it and try again.");
   if (matched("INVALID_TOKEN")) return new SharedBillError("invalid_token", "This share link is invalid.");
   if (matched("SHARED_BILL_UNAVAILABLE") || matched("PARTICIPANT_NOT_FOUND")) return new SharedBillError("unavailable", "This shared bill is unavailable or has expired.");
-  if (matched("PARTICIPANT_ALREADY_CLAIMED")) return new SharedBillError("participant_claimed", "That participant has already been claimed.");
-  if (matched("PARTICIPANT_NOT_CLAIMED")) return new SharedBillError("participant_not_claimed", "Claim your participant before changing your split.");
+  if (matched("PARTICIPANT_ALREADY_CLAIMED")) return new SharedBillError("migration_required", "Apply the latest shared-bill migration to allow multiple friends to select the same name.");
+  if (matched("PARTICIPANT_NOT_CLAIMED")) return new SharedBillError("participant_not_claimed", "Select a participant before changing your split.");
   if (matched("OWNER_CANNOT_CLAIM_PARTICIPANT")) return new SharedBillError("owner_cannot_claim", "The bill owner cannot claim a friend participant.");
   if (matched("ITEM_NOT_IN_RECEIPT")) return new SharedBillError("item_not_in_receipt", "That item does not belong to this receipt.");
   if (matched("VALIDATION_ERROR") || matched("CLAIMED_PARTICIPANT_CANNOT_BE_REMOVED") || ["23502", "23503", "23505", "23514"].includes(code)) return new SharedBillError("validation", "The shared bill data could not be saved.");
@@ -90,7 +90,7 @@ export async function fetchSharedBill(billId: string): Promise<SharedBillSnapsho
   return assertSnapshotEnvelope(await callRpc(client, "fetch_shared_bill", { p_bill_id: billId }));
 }
 
-export async function claimParticipant(
+export async function selectParticipant(
   billId: string,
   participantId: string,
 ): Promise<{ participantId: string; snapshot: SplitSession }> {
@@ -106,15 +106,17 @@ export async function setSharedParticipation(
   billId: string,
   receiptId: string,
   itemId: string,
+  participantId: string,
   selected: boolean,
   expectedRevision: number,
 ): Promise<SplitSession> {
   const client = getClient();
   await ensureAnonymousSession(client);
-  const result = await callRpc(client, "set_shared_participation", {
+  const result = await callRpc(client, "set_shared_participation_for_participant", {
     p_bill_id: billId,
     p_receipt_id: receiptId,
     p_item_id: itemId,
+    p_participant_id: participantId,
     p_selected: selected,
     p_expected_revision: expectedRevision,
   });

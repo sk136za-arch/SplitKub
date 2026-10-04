@@ -45,6 +45,11 @@ describe("shared bill error mapping", () => {
     expect(mapSharedBillError(existing)).toBe(existing);
     expect(mapSharedBillError(new TypeError("network failure")).code).toBe("network");
   });
+
+  it("asks for the new migration when an old backend still enforces exclusive names", () => {
+    expect(mapSharedBillError({ message: "PARTICIPANT_ALREADY_CLAIMED" }).code).toBe("migration_required");
+    expect(mapSharedBillError({ message: "PARTICIPANT_NOT_CLAIMED" }).code).toBe("participant_not_claimed");
+  });
 });
 
 describe("private Realtime subscription lifecycle", () => {

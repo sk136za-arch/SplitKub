@@ -5,16 +5,21 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { calculateBill } from "@/lib/calculateBill";
 import { formatMoney } from "@/lib/money";
+import { readFriendSelection, reconcileFriendSelection, rememberFriendSelection } from "@/lib/friendSelection";
 import { participantLabels } from "@/lib/participantLabels";
 import { shouldApplyRemoteRevision } from "@/lib/sharedSnapshot";
 import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive } from "@/lib/sharedSubscription";
 import type { SplitSession } from "@/types/bill";
-import { claimSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
+import { selectSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import { SessionSummary } from "./SessionSummary";
 import { OwnerApp } from "./OwnerApp";
 
 type ViewStatus = "loading" | "ready" | "error";
 type SyncStatus = "live" | "connecting" | "offline" | "stale";
+
+function selectionStorage(): Storage | null {
+  try { return window.sessionStorage; } catch { return null; }
+}
 
 export function FriendBillClient({ publicId }: { publicId: string }) {
   const [viewStatus, setViewStatus] = useState<ViewStatus>("loading");
@@ -134,12 +139,24 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       setBillId(opened.billId);
       revisionSeen.current = opened.snapshot.revision;
       setSnapshot(opened.snapshot);
-      try {
-        const remembered = window.sessionStorage.getItem(`splitkub:friend:${publicId}`);
-        if (remembered && opened.snapshot.participants.some((person) => person.id === remembered)) setSelectedPersonId(remembered);
-      } catch { /* Continue with manual selection if storage is blocked. */ }
       setViewStatus("ready");
       setSyncStatus(navigator.onLine ? "connecting" : "offline");
+      const remembered = readFriendSelection(selectionStorage(), publicId, opened.snapshot.participants);
+      if (remembered) {
+        setPending(true);
+        // A remembered name is a local preference, not server authorization.
+        // Re-select it for the current anonymous user before enabling edits.
+        void selectSharedParticipant(opened.billId, remembered).then((next) => {
+          if (!isCurrent()) return;
+          if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+            revisionSeen.current = next.revision;
+            setSnapshot(next);
+          }
+          setSelectedPersonId(remembered);
+        }, (caught) => {
+          if (isCurrent()) setError(sharedErrorMessage(caught));
+        }).finally(() => { if (isCurrent()) setPending(false); });
+      }
     }, (caught) => {
       if (isCurrent()) { setViewStatus("error"); setError(sharedErrorMessage(caught)); }
     });
@@ -150,6 +167,14 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       void subscriptionController.stop();
     };
   }, [publicId, hashRevision, subscriptionController]);
+
+  useEffect(() => {
+    if (!snapshot || !selectedPersonId) return;
+    if (reconcileFriendSelection(selectionStorage(), publicId, selectedPersonId, snapshot.participants)) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- A remote owner edit can remove this selected participant. */
+    setSelectedPersonId("");
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [publicId, selectedPersonId, snapshot]);
 
   useEffect(() => {
     if (!billId || viewStatus !== "ready") return;
@@ -186,14 +211,14 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     const generation = openGeneration.current;
     setPending(true); setError(""); setNotice("");
     try {
-      const next = await claimSharedParticipant(billId, participantId);
+      const next = await selectSharedParticipant(billId, participantId);
       if (generation !== openGeneration.current) return;
       if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
         revisionSeen.current = next.revision;
         setSnapshot(next);
       }
       setSelectedPersonId(participantId);
-      try { window.sessionStorage.setItem(`splitkub:friend:${publicId}`, participantId); } catch { /* Selection still works for this visit. */ }
+      rememberFriendSelection(selectionStorage(), publicId, participantId);
     } catch (caught) { if (generation === openGeneration.current) setError(sharedErrorMessage(caught)); }
     finally { if (generation === openGeneration.current) setPending(false); }
   }
@@ -203,7 +228,7 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     const generation = openGeneration.current;
     setPending(true); setError(""); setNotice("");
     try {
-      const next = await toggleSharedParticipation(billId, receiptId, itemId, selected, snapshot.revision);
+      const next = await toggleSharedParticipation(billId, receiptId, itemId, selectedPersonId, selected, snapshot.revision);
       if (generation !== openGeneration.current) return;
       if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
         revisionSeen.current = next.revision;

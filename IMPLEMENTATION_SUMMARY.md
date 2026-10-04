@@ -2,11 +2,13 @@
 
 ## Task
 
-Implement SplitKub MVP 1.1 plus settlement routing: multiple receipts, one payer per receipt, paid/owed/net summaries, direct or collector payment routes, anonymous shared bills, friend participation editing, private Realtime updates, and 90-day retention.
+Implement SplitKub MVP 1.1 plus settlement routing and unlocked shared participant selection: multiple receipts, one payer per receipt, paid/owed/net summaries, direct or collector payment routes, anonymous shared bills, friend participation editing, private Realtime updates, and 90-day retention.
 
 ## Result
 
 SplitKub now supports multiple receipts in one split session. Each receipt has its own payer and items, while the summary derives how much every participant paid, owes, and should receive or pay. The owner can select direct net-based routes or a collector who receives every noncollector's gross owed amount and reimburses every noncollector payer's gross paid amount, with receipt breakdowns. Owners can create capability links when Supabase is configured; friends open a single trust-based link, select their name, and update only that participant's item assignments. Local-only mode remains usable without Supabase.
+
+Multiple friends may now select the same participant name. Each browser session remembers its own choice, and deleting that participant clears the choice without deleting friend memberships.
 
 ## Implementation Plan
 
@@ -30,11 +32,15 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 - Added an additive routing migration with owner-only revision-checked updates, same-bill collector FK, direct defaults for existing rows, and pgTAP validation/security assertions. The friend participation RPC is unchanged.
 - Added remote snapshot normalization only for old snapshots lacking both routing fields; partial routing snapshots are rejected. A separate additive capability RPC lets collector create/update fail with `migration_required` before writing to an older backend, and a post-write check refuses a downgraded collector response.
 - Hardened shared-link opening and Realtime lifecycle: a friend-token visit follows the role returned by the RPC; an existing owner gets an ephemeral owner workspace with no friend token saved as owner recovery. Fragment changes restart opening and invalidate late responses. Realtime channel removal is one-shot/non-reentrant, terminal subscription errors use `realtime_unavailable`, and both owner/friend fetch a canonical snapshot after `SUBSCRIBED` with stale-generation guards.
+- Added migration 004 to remove the exclusive participant-choice index and change the member FK to clear only `participant_id` when a participant is removed. The owner RPC still checks revision and keeps settlement validation; the friend choice RPC still locks the bill and derives identity from the authenticated member row. A stale participation request succeeds without a revision bump only if its requested assignment state is already true.
+- Added migration 005 with an authenticated selection-bound friend toggle RPC. Each request validates the explicit participant against the bill, updates the member's selected identity, and applies only that participant's assignment under the same bill lock; the legacy RPC remains available for older clients. The browser now sends its tab-local selected participant ID so two tabs sharing one anonymous auth session cannot toggle each other's person.
+- The friend client stores each bill's chosen participant ID in sessionStorage, re-selects that ID for the current anonymous user after opening a link, clears it when a canonical snapshot removes that participant, and ignores late responses after a link change. An old backend returning the former exclusive-choice error now prompts for the migration.
 
 ## Architecture Decisions
 
 - One session uses one currency: THB or USD. Money remains an integer in satang or cents; no exchange-rate conversion is performed.
 - Friend access is intentionally trust-based. A link holder can select another participant name, but cannot change receipt structure, prices, participants, or payers.
+- Participant selection is not exclusive or an authentication boundary: multiple devices can edit the same participant's item assignments. sessionStorage holds each tab's preference; every toggle explicitly supplies that participant and the server atomically validates and applies the action rather than trusting a mutable shared per-user selection.
 - Realtime is only a change notification. Clients always refetch a validated canonical snapshot and apply revisions monotonically.
 - A successful Realtime subscription also triggers a canonical refresh to close the gap between initial link opening and joining the channel; old-channel callbacks and late fetches cannot replace a newer link or connection generation.
 - QR images remain browser-memory-only and are never uploaded. PromptPay is persisted per participant.
@@ -45,11 +51,11 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 
 ## Tests
 
-`npm run test` passed: 23 files, 121 tests. Coverage includes multi-receipt arithmetic and invariants, deterministic direct and gross collector routing, consistent exact-rational payment display across Summary/copy/PNG (fractional, exact, multi-item, endpoint/order preservation, no-decrease behavior, collector reimbursement, person-card display-vs-ledger amounts), ledger regressions, old/partial remote snapshot compatibility, capability preflight and downgrade detection, destination-aware share and QR rules, actual owner role without token persistence, invalid references/payers, V1/V2→V3 recovery, PromptPay preservation and explicit resolution, token-fragment parsing, distinct shared-link/expiry/Realtime errors, monotonic snapshots, one-shot/non-reentrant Realtime channel cleanup, dirty-notification refresh draining, stale subscription suppression, receipt payer labels, clipboard/image sharing, mascot fallback, and toast behavior.
+`npm run test` passed: 25 files, 127 tests. Coverage includes per-bill friend selection storage and deleted-ID reconciliation, tab-bound friend participation RPC arguments, old-backend choice-error mapping, multi-receipt arithmetic and invariants, deterministic direct and gross collector routing, consistent exact-rational payment display across Summary/copy/PNG (fractional, exact, multi-item, endpoint/order preservation, no-decrease behavior, collector reimbursement, person-card display-vs-ledger amounts), ledger regressions, old/partial remote snapshot compatibility, capability preflight and downgrade detection, destination-aware share and QR rules, actual owner role without token persistence, invalid references/payers, V1/V2→V3 recovery, PromptPay preservation and explicit resolution, token-fragment parsing, distinct shared-link/expiry/Realtime errors, monotonic snapshots, one-shot/non-reentrant Realtime channel cleanup, dirty-notification refresh draining, stale subscription suppression, receipt payer labels, clipboard/image sharing, mascot fallback, and toast behavior.
 
 ## Validation
 
-- `npm run test`: passed, 121/121 tests.
+- `npm run test`: passed, 127/127 tests.
 - `npm run lint`: passed.
 - `npx tsc --noEmit`: passed.
 - `npm run build`: passed with Next.js 16.3.7; `/` is static and `/b/[publicId]` is dynamic.
@@ -71,14 +77,14 @@ Independent test and final PR review found no remaining P0/P1/P2 issues. Correct
 
 ## Remaining Concerns
 
-- The SQL migrations and pgTAP security tests were not executed. The installed Supabase CLI could not write its telemetry file under the sandboxed user profile, and Docker Engine access was denied; SQL was reviewed statically only.
+- The SQL migrations and pgTAP security tests, including the unlocked-selection and same-anonymous-user two-tab tests, were not executed. The installed Supabase CLI could not write its telemetry file under the sandboxed user profile; SQL was reviewed statically only. True cross-connection selection/deletion races remain unverified in this environment.
 - Anonymous auth, RPCs, private Realtime, expiry cleanup, and two-browser collaboration still require an end-to-end test against a configured Supabase project.
 - Physical mobile viewport, native share dialog, QR download, and live reconnect behavior were not exercised on a real device because no browser automation surface was available.
 - The share feature remains disabled until the documented Supabase settings and environment variables are configured.
 
 ## Files Changed
 
-Core changes include `src/types/bill.ts`, `src/lib/calculateBill.ts`, `src/lib/billState.ts`, `src/lib/storage.ts`, owner/friend UI components, shared adapters/controllers, `src/lib/supabase/`, `supabase/`, sharing/image utilities, tests, `.env.example`, `README.md`, and package dependency files.
+Current friend-selection changes include `supabase/migrations/202610030004_unlocked_participant_selection.sql`, `supabase/migrations/202610040001_selection_bound_friend_participation.sql`, `supabase/tests/unlocked_participant_selection.test.sql`, `supabase/tests/selection_bound_participation.test.sql`, `src/components/FriendBillClient.tsx`, `src/lib/friendSelection.ts`, shared adapters/errors and tests, plus README and setup documentation. Earlier core changes include `src/types/bill.ts`, `src/lib/calculateBill.ts`, `src/lib/billState.ts`, `src/lib/storage.ts`, owner/friend UI components, shared adapters/controllers, `src/lib/supabase/`, `supabase/`, sharing/image utilities, tests, `.env.example`, and package dependency files.
 
 ## Final Status
 
