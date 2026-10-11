@@ -4,12 +4,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { SessionSummary } from "../components/SessionSummary";
 import { emptySession } from "../lib/billState";
 import { calculateBill } from "../lib/calculateBill";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 describe("rounded payment summary", () => {
   it("shows display transfer totals while keeping integer ledger details available", () => {
     const session = {
       ...emptySession(), participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
-      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "A", items: [{ id: "i", name: "Item", price: 200000, participantIds: ["A", "B", "C"] }] }],
+      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Item", price: 200000, participantIds: ["A", "B", "C"] }] }],
     };
     const result = calculateBill(session);
     const markup = renderToStaticMarkup(createElement(SessionSummary, { result, session }));
@@ -23,7 +24,7 @@ describe("rounded payment summary", () => {
     const session = {
       ...emptySession(), settlementMode: "collector" as const, collectorParticipantId: "A",
       participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
-      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "B", items: [{ id: "i", name: "Item", price: 200000, participantIds: ["A", "B", "C"] }] }],
+      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "B", adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Item", price: 200000, participantIds: ["A", "B", "C"] }] }],
     };
     const markup = renderToStaticMarkup(createElement(SessionSummary, { result: calculateBill(session), session }));
     expect(markup).toContain("ต้องโอน ฿666.67");

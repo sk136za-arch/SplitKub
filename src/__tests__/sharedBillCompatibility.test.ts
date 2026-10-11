@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emptySession } from "../lib/billState";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 const mocks = vi.hoisted(() => ({ rpc: vi.fn(), getSession: vi.fn(), signInAnonymously: vi.fn() }));
 vi.mock("../lib/supabase/client", () => ({
@@ -22,6 +23,12 @@ function oldSnapshot() {
 
 function created(snapshot: unknown) {
   return { publicId: "public", billId: "bill", friendToken: "f".repeat(43), ownerToken: "o".repeat(43), snapshot };
+}
+
+function adjustedDraft() {
+  return { ...draft(), receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "a",
+    adjustments: { ...defaultReceiptAdjustments(), vatEnabled: true },
+    items: [{ id: "i", name: "Item", price: 100, participantIds: ["a"] }] }] };
 }
 
 beforeEach(() => {
@@ -96,5 +103,72 @@ describe("shared backend routing compatibility", () => {
         : { data: collector, error: null });
     expect(await applyOwnerAction("bill", 1, { type: "set-collector", participantId: "a" })).toEqual(collector);
     expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["fetch_shared_bill", "shared_bill_capabilities", "apply_owner_action"]);
+  });
+});
+
+describe("shared backend receipt-adjustment compatibility", () => {
+  it("preflights enabled adjustments before create on an old backend", async () => {
+    mocks.rpc.mockResolvedValue({ data: { settlementRoutingVersion: 1 }, error: null });
+    await expect(createSharedBill(adjustedDraft())).rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["shared_bill_capabilities"]);
+  });
+
+  it("preflights disabled-but-nondefault stored adjustment values before create", async () => {
+    const requested = { ...draft(), receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "a",
+      adjustments: { ...defaultReceiptAdjustments(), vatRateBps: 900 },
+      items: [{ id: "i", name: "Item", price: 100, participantIds: ["a"] }] }] };
+    mocks.rpc.mockResolvedValue({ data: { settlementRoutingVersion: 1 }, error: null });
+    await expect(createSharedBill(requested)).rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["shared_bill_capabilities"]);
+  });
+
+  it("rejects a backend that drops disabled-but-nondefault stored values", async () => {
+    const requested = { ...draft(), receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "a",
+      adjustments: { ...defaultReceiptAdjustments(), serviceChargeRateBps: 1200 },
+      items: [{ id: "i", name: "Item", price: 100, participantIds: ["a"] }] }] };
+    mocks.rpc.mockImplementation(async (name: string) => name === "shared_bill_capabilities"
+      ? { data: { receiptAdjustmentsVersion: 1 }, error: null }
+      : { data: created({ ...requested, receipts: requested.receipts.map((receipt) => ({ ...receipt, adjustments: defaultReceiptAdjustments() })) }), error: null });
+    await expect(createSharedBill(requested)).rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["shared_bill_capabilities", "create_shared_bill"]);
+  });
+
+  it("rejects a backend that advertises adjustments but returns a downgraded receipt", async () => {
+    const requested = adjustedDraft();
+    mocks.rpc.mockImplementation(async (name: string) => name === "shared_bill_capabilities"
+      ? { data: { receiptAdjustmentsVersion: 1 }, error: null }
+      : { data: created({ ...requested, receipts: requested.receipts.map((receipt) => {
+        const old: Record<string, unknown> = { ...receipt };
+        delete old.adjustments;
+        return old;
+      }) }), error: null });
+    await expect(createSharedBill(requested)).rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["shared_bill_capabilities", "create_shared_bill"]);
+  });
+
+  it("preflights an owner edit that enables VAT before applying it", async () => {
+    const current = { ...draft(), id: "bill", revision: 1, expiresAt: "2027-01-01T00:00:00Z",
+      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "a",
+        adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Item", price: 100, participantIds: ["a"] }] }] };
+    mocks.rpc.mockImplementation(async (name: string) => name === "fetch_shared_bill"
+      ? { data: { publicId: "public", billId: "bill", snapshot: current }, error: null }
+      : { data: { settlementRoutingVersion: 1 }, error: null });
+    await expect(applyOwnerAction("bill", 1, { type: "set-receipt-adjustments", receiptId: "r",
+      adjustments: { ...defaultReceiptAdjustments(), vatEnabled: true } }))
+      .rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["fetch_shared_bill", "shared_bill_capabilities"]);
+  });
+
+  it("preflights a disabled-but-nondefault owner adjustment edit", async () => {
+    const current = { ...draft(), id: "bill", revision: 1, expiresAt: "2027-01-01T00:00:00Z",
+      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "a",
+        adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Item", price: 100, participantIds: ["a"] }] }] };
+    mocks.rpc.mockImplementation(async (name: string) => name === "fetch_shared_bill"
+      ? { data: { publicId: "public", billId: "bill", snapshot: current }, error: null }
+      : { data: { receiptAdjustmentsVersion: 0 }, error: null });
+    await expect(applyOwnerAction("bill", 1, { type: "set-receipt-adjustments", receiptId: "r",
+      adjustments: { ...defaultReceiptAdjustments(), serviceChargeRateBps: 1200 } }))
+      .rejects.toMatchObject({ code: "migration_required" });
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(["fetch_shared_bill", "shared_bill_capabilities"]);
   });
 });

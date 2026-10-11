@@ -67,7 +67,10 @@ export function buildSessionShareText(result: SessionResult, session: SplitSessi
     `ยอดรวม: ${formatMoney(result.total, session.currency)}`,
     "",
     "ใบเสร็จ",
-    ...result.receipts.map((receipt) => `${receipt.title} · จ่ายโดย ${labels.get(receipt.paidByParticipantId)}: ${formatMoney(receipt.total, session.currency)}`),
+    ...result.receipts.flatMap((receipt) => [
+      `${receipt.title} · จ่ายโดย ${labels.get(receipt.paidByParticipantId)}: ${formatMoney(receipt.total, session.currency)}`,
+      `  รายการ ${formatMoney(receipt.subtotal, session.currency)}${receipt.preDiscount ? ` − ลดก่อน ${formatMoney(receipt.preDiscount, session.currency)}` : ""}${receipt.serviceCharge ? ` + ค่าบริการ ${formatMoney(receipt.serviceCharge, session.currency)}` : ""}${receipt.vat ? ` + VAT ${formatMoney(receipt.vat, session.currency)}` : ""}${receipt.postDiscount ? ` − ลดหลัง ${formatMoney(receipt.postDiscount, session.currency)}` : ""}`,
+    ]),
     "",
     "ยอดที่ต้องโอนและรับ",
     ...paymentTotals.map((person) => `${labels.get(person.participantId)}: ต้องโอน ${formatMoney(person.outgoing, session.currency)} · จะรับ ${formatMoney(person.incoming, session.currency)}`),

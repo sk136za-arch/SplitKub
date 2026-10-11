@@ -1,25 +1,50 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { formatMoney, moneyInput, parseMoney } from "@/lib/money";
 import { participantLabels } from "@/lib/participantLabels";
-import type { BillItem, Currency, Participant } from "@/types/bill";
+import { defaultReceiptAdjustments } from "@/lib/receiptAdjustments";
+import { previewReceiptAdjustments } from "@/lib/receiptAdjustmentValidation";
+import type { Currency, Participant, Receipt, ReceiptAdjustments, SplitSession } from "@/types/bill";
 
-export interface ReceiptView {
-  id: string;
-  title: string;
-  paidByParticipantId: string;
-  items: BillItem[];
+export type ReceiptView = Receipt;
+
+function parseNonnegativeMoney(value: string): number | null {
+  const normalized = value.trim();
+  if (normalized.length > 32 || !/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const [whole, fraction = ""] = normalized.split(".");
+  const result = BigInt(whole) * BigInt(100) + BigInt(fraction.padEnd(2, "0"));
+  return result <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(result) : null;
+}
+
+function readAdjustments(form: HTMLFormElement): ReceiptAdjustments | null {
+  const data = new FormData(form);
+  const vatRateBps = parseMoney(String(data.get("vatRate") ?? ""));
+  const serviceChargeRateBps = parseMoney(String(data.get("serviceRate") ?? ""));
+  const preDiscount = parseNonnegativeMoney(String(data.get("preDiscount") ?? ""));
+  const postDiscount = parseNonnegativeMoney(String(data.get("postDiscount") ?? ""));
+  if (!vatRateBps || vatRateBps > 10000 || !serviceChargeRateBps || serviceChargeRateBps > 10000
+    || preDiscount === null || postDiscount === null) return null;
+  const adjustments = {
+    vatEnabled: data.has("vatEnabled"), vatRateBps,
+    serviceChargeEnabled: data.has("serviceChargeEnabled"), serviceChargeRateBps,
+    preDiscountEnabled: data.has("preDiscountEnabled"), preDiscount,
+    postDiscountEnabled: data.has("postDiscountEnabled"), postDiscount,
+  };
+  if ((adjustments.preDiscountEnabled && preDiscount === 0) || (adjustments.postDiscountEnabled && postDiscount === 0)) return null;
+  return adjustments;
 }
 
 interface ReceiptEditorProps {
   receipt: ReceiptView;
+  session: SplitSession;
   participants: Participant[];
   currency: Currency;
   disabled?: boolean;
   onRename: (title: string) => Promise<boolean>;
   onRemove: () => void;
   onSetPayer: (participantId: string) => void;
+  onSetAdjustments: (adjustments: ReceiptAdjustments) => Promise<boolean>;
   onAddItem: (name: string, price: number) => Promise<boolean>;
   onEditItem: (id: string, name: string, price: number) => Promise<boolean>;
   onRemoveItem: (id: string) => void;
@@ -27,13 +52,17 @@ interface ReceiptEditorProps {
   onSelectAll: (itemId: string, selected: boolean) => void;
 }
 
-export function ReceiptEditor({ receipt, participants, currency, disabled = false, onRename, onRemove, onSetPayer, onAddItem, onEditItem, onRemoveItem, onToggle, onSelectAll }: ReceiptEditorProps) {
+export function ReceiptEditor({ receipt, session, participants, currency, disabled = false, onRename, onRemove, onSetPayer, onSetAdjustments, onAddItem, onEditItem, onRemoveItem, onToggle, onSelectAll }: ReceiptEditorProps) {
   const [title, setTitle] = useState(receipt.title);
   const [itemName, setItemName] = useState("");
   const [itemPrice, setItemPrice] = useState("");
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [adjustmentError, setAdjustmentError] = useState("");
+  const [adjustmentExpanded, setAdjustmentExpanded] = useState(false);
+  const [adjustmentDraft, setAdjustmentDraft] = useState<ReceiptAdjustments>(receipt.adjustments ?? defaultReceiptAdjustments());
   const labels = participantLabels(participants);
+  const adjustmentPreview = useMemo(() => previewReceiptAdjustments(session, receipt.id, adjustmentDraft), [session, receipt.id, adjustmentDraft]);
 
   async function submitTitle(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -54,6 +83,26 @@ export function ReceiptEditor({ receipt, participants, currency, disabled = fals
     setItemName(""); setItemPrice(""); setEditingItemId(null); setError("");
   }
 
+  async function submitAdjustments(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const adjustments = readAdjustments(event.currentTarget);
+    if (!adjustments) {
+      setAdjustmentError("กรอกอัตรา 0.01–100% และส่วนลดที่เปิดใช้งานต้องมากกว่า 0");
+      return;
+    }
+    const validation = previewReceiptAdjustments(session, receipt.id, adjustments);
+    if (validation.error) { setAdjustmentError(validation.error); return; }
+    if (await onSetAdjustments(adjustments)) setAdjustmentError("");
+  }
+
+  function updateAdjustmentDraft(form: HTMLFormElement) {
+    const next = readAdjustments(form);
+    if (!next) { setAdjustmentError("กรอกอัตรา 0.01–100% และส่วนลดที่เปิดใช้งานต้องมากกว่า 0"); return; }
+    setAdjustmentDraft(next);
+    const validation = previewReceiptAdjustments(session, receipt.id, next);
+    setAdjustmentError(validation.error ?? "");
+  }
+
   return <section className="card p-5 sm:p-7" aria-labelledby={`receipt-${receipt.id}`}>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
@@ -68,6 +117,22 @@ export function ReceiptEditor({ receipt, participants, currency, disabled = fals
       <button type="submit" className="btn-secondary self-end" disabled={disabled || title.trim() === receipt.title}>บันทึกชื่อ</button>
     </form>
     <div className="mt-4"><label htmlFor={`receipt-payer-${receipt.id}`} className="mb-1 block text-sm font-bold">คนที่จ่ายใบเสร็จนี้</label><select id={`receipt-payer-${receipt.id}`} className="field" value={receipt.paidByParticipantId} onChange={(event) => onSetPayer(event.target.value)} disabled={disabled || participants.length === 0}><option value="">เลือกคนที่ออกเงิน</option>{participants.map((person) => <option key={person.id} value={person.id}>{labels.get(person.id)}</option>)}</select></div>
+
+    <section className="mt-6 rounded-2xl border border-[#eeeaf6] p-4">
+      <button type="button" className="flex min-h-11 w-full items-center justify-between gap-3 text-left font-bold" aria-expanded={adjustmentExpanded} aria-controls={`receipt-adjustments-${receipt.id}`} onClick={() => setAdjustmentExpanded((expanded) => !expanded)}>การคำนวณเพิ่มเติม<span aria-hidden="true">{adjustmentExpanded ? "−" : "+"}</span></button>
+      {adjustmentExpanded && <form id={`receipt-adjustments-${receipt.id}`} onChange={(event) => updateAdjustmentDraft(event.currentTarget)} onSubmit={(event) => void submitAdjustments(event)} className="mt-3" noValidate>
+      <p className="muted mt-1 text-sm">คำนวณแยกเฉพาะใบเสร็จนี้: ยอดรายการ → ลดก่อน → ค่าบริการ → VAT → ลดหลัง → ยอดสุทธิ</p>
+      {adjustmentPreview.total && <ol aria-label="ตัวอย่างการคำนวณใบเสร็จ" className="mt-3 grid gap-2 rounded-xl bg-[#f8f6fd] p-3 text-sm sm:grid-cols-3"><li>ยอดรายการ: {formatMoney(adjustmentPreview.total.subtotal, currency)}</li><li>− ลดก่อน: {formatMoney(adjustmentPreview.total.preDiscount, currency)}</li><li>+ ค่าบริการ: {formatMoney(adjustmentPreview.total.serviceCharge, currency)}</li><li>+ VAT: {formatMoney(adjustmentPreview.total.vat, currency)}</li><li>− ลดหลัง: {formatMoney(adjustmentPreview.total.postDiscount, currency)}</li><li className="font-bold">ยอดสุทธิ: {formatMoney(adjustmentPreview.total.total, currency)}</li></ol>}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label className="text-sm font-bold"><span className="flex items-center gap-2"><input type="checkbox" name="serviceChargeEnabled" defaultChecked={receipt.adjustments.serviceChargeEnabled} disabled={disabled}/> ค่าบริการ (%)</span><input className="field mt-1" name="serviceRate" inputMode="decimal" defaultValue={moneyInput(receipt.adjustments.serviceChargeRateBps)} disabled={disabled} aria-label={`อัตราค่าบริการ ${receipt.title}`}/></label>
+        <label className="text-sm font-bold"><span className="flex items-center gap-2"><input type="checkbox" name="vatEnabled" defaultChecked={receipt.adjustments.vatEnabled} disabled={disabled}/> VAT (%)</span><input className="field mt-1" name="vatRate" inputMode="decimal" defaultValue={moneyInput(receipt.adjustments.vatRateBps)} disabled={disabled} aria-label={`อัตรา VAT ${receipt.title}`}/></label>
+        <label className="text-sm font-bold"><span className="flex items-center gap-2"><input type="checkbox" name="preDiscountEnabled" defaultChecked={receipt.adjustments.preDiscountEnabled} disabled={disabled}/> ส่วนลดก่อนค่าบริการ ({currency})</span><input className="field mt-1" name="preDiscount" inputMode="decimal" defaultValue={moneyInput(receipt.adjustments.preDiscount)} disabled={disabled} aria-label={`ส่วนลดก่อนค่าบริการ ${receipt.title}`}/></label>
+        <label className="text-sm font-bold"><span className="flex items-center gap-2"><input type="checkbox" name="postDiscountEnabled" defaultChecked={receipt.adjustments.postDiscountEnabled} disabled={disabled}/> ส่วนลดหลังภาษี ({currency})</span><input className="field mt-1" name="postDiscount" inputMode="decimal" defaultValue={moneyInput(receipt.adjustments.postDiscount)} disabled={disabled} aria-label={`ส่วนลดหลังภาษี ${receipt.title}`}/></label>
+      </div>
+      {adjustmentError && <p role="alert" className="error mt-3">{adjustmentError}</p>}
+      <button type="submit" className="btn-secondary mt-4" disabled={disabled}>บันทึกค่าบริการและส่วนลด</button>
+    </form>}
+    </section>
 
     <div className="mt-6 border-t border-[#eeeaf6] pt-5">
       <h4 className="font-bold">รายการในใบเสร็จ</h4>

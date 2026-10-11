@@ -1,11 +1,13 @@
 import type { Bill, SplitSession } from "@/types/bill";
 import { emptyBill } from "./billState";
+import { addMissingReceiptAdjustments, defaultReceiptAdjustments, isReceiptAdjustments } from "./receiptAdjustments";
 
 export const STORAGE_KEY = "splitkub:bill:v1";
 const VERSION = 1;
 export const V2_SESSION_STORAGE_KEY = "splitkub:session:v2";
-export const SESSION_STORAGE_KEY = "splitkub:session:v3";
-const SESSION_VERSION = 3;
+export const V3_SESSION_STORAGE_KEY = "splitkub:session:v3";
+export const SESSION_STORAGE_KEY = "splitkub:session:v4";
+const SESSION_VERSION = 4;
 export const SESSION_MIGRATION_NOTICE_KEY = "splitkub:session:migration-notice:v1";
 export const SESSION_PENDING_PROMPTPAY_KEY = "splitkub:session:pending-promptpay:v1";
 export const SESSION_PROMPTPAY_MIGRATION_RESOLVED_KEY = "splitkub:session:promptpay-migration-resolved:v1";
@@ -80,7 +82,7 @@ export function saveSession(storage: Pick<Storage, "setItem">, session: SplitSes
   storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ version: SESSION_VERSION, started, session }));
 }
 
-/** Reads V3 first. Valid V2/V1 drafts are copied into V3; original keys remain intact. */
+/** Reads V4 first. Valid V3/V2/V1 drafts are copied into V4; original keys remain intact. */
 export function loadSession(storage: Pick<Storage, "getItem" | "setItem">): SplitSession | null {
   const pendingLegacyPromptPay = preserveLegacyPromptPay(storage);
   try {
@@ -90,6 +92,18 @@ export function loadSession(storage: Pick<Storage, "getItem" | "setItem">): Spli
       if (envelope.version === SESSION_VERSION && isSession(envelope.session) && shouldPersistSession(envelope.started === true, envelope.session)) {
         if (pendingLegacyPromptPay) ensureMigrationNotice(storage);
         return envelope.session;
+      }
+    }
+  } catch { /* Fall back to older recoverable copies. */ }
+  try {
+    const rawV3 = storage.getItem(V3_SESSION_STORAGE_KEY);
+    if (rawV3) {
+      const envelope = JSON.parse(rawV3) as { version?: unknown; started?: unknown; session?: unknown };
+      const migratedV3 = migrateV3Session(envelope.version === 3 ? envelope.session : null);
+      if (migratedV3 && shouldPersistSession(envelope.started === true, migratedV3)) {
+        try { saveSession(storage, migratedV3, envelope.started === true); } catch { /* Preserve V3 if copying fails. */ }
+        if (pendingLegacyPromptPay) ensureMigrationNotice(storage);
+        return migratedV3;
       }
     }
   } catch { /* Fall back to V2 or the independent V1 copy. */ }
@@ -123,14 +137,19 @@ export function migrateLegacyBill(bill: Bill): SplitSession {
     id: "", title: "บิลของเรา", currency: bill.currency, revision: 0, expiresAt: "",
     settlementMode: "direct", collectorParticipantId: "",
     participants: bill.participants.map((person) => ({ ...person, promptPay: "" })),
-    receipts: [{ id: "legacy-receipt-1", title: "ใบเสร็จที่ 1", paidByParticipantId: "", items: bill.items.map((item) => ({ ...item, participantIds: [...item.participantIds] })) }],
+    receipts: [{ id: "legacy-receipt-1", title: "ใบเสร็จที่ 1", paidByParticipantId: "", adjustments: defaultReceiptAdjustments(), items: bill.items.map((item) => ({ ...item, participantIds: [...item.participantIds] })) }],
   };
 }
 
-/** Accepts only a structurally valid V2 session and adds routing defaults without mutating it. */
+/** Accepts only a structurally valid V2 session and adds routing/adjustment defaults without mutating it. */
 export function migrateV2Session(value: unknown): SplitSession | null {
   if (!value || typeof value !== "object") return null;
   const migrated = { ...value, settlementMode: "direct", collectorParticipantId: "" };
+  return migrateV3Session(migrated);
+}
+
+export function migrateV3Session(value: unknown): SplitSession | null {
+  const migrated = addMissingReceiptAdjustments(value);
   return isSession(migrated) ? migrated : null;
 }
 
@@ -211,10 +230,11 @@ export function confirmRemoteSession(storage: Pick<Storage, "getItem" | "setItem
     throw new Error("ยังบันทึก PromptPay เดิมไม่สำเร็จ จึงเก็บบิลเก่าไว้ก่อน");
   }
   storage.removeItem(STORAGE_KEY);
+  storage.removeItem(V3_SESSION_STORAGE_KEY);
   storage.removeItem(V2_SESSION_STORAGE_KEY);
 }
 
-/** Persist the exact server-confirmed V3 draft before retiring its V1/V2 copies. */
+/** Persist the exact server-confirmed V4 draft before retiring its V1/V2/V3 copies. */
 export function saveConfirmedRemoteSession(
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
   confirmedSession: SplitSession,
@@ -226,6 +246,7 @@ export function saveConfirmedRemoteSession(
 /** Explicit user clear removes all copies so an older bill cannot reappear. */
 export function clearSessionStorage(storage: Pick<Storage, "removeItem">): void {
   storage.removeItem(SESSION_STORAGE_KEY);
+  storage.removeItem(V3_SESSION_STORAGE_KEY);
   storage.removeItem(V2_SESSION_STORAGE_KEY);
   storage.removeItem(STORAGE_KEY);
   storage.removeItem(SESSION_MIGRATION_NOTICE_KEY);
@@ -262,6 +283,7 @@ function isSession(value: unknown): value is SplitSession {
       typeof receipt.title !== "string" || !receipt.title.trim() ||
       typeof receipt.paidByParticipantId !== "string" ||
       (receipt.paidByParticipantId !== "" && !participantIds.has(receipt.paidByParticipantId)) ||
+      !isReceiptAdjustments(receipt.adjustments) ||
       !Array.isArray(receipt.items)) return false;
     receiptIds.add(receipt.id);
     const itemIds = new Set<string>();

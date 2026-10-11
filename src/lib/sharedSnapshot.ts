@@ -1,5 +1,6 @@
 import type { SplitSession } from "../types/bill";
 import { isSplitSession } from "./storage";
+import { addMissingReceiptAdjustments } from "./receiptAdjustments";
 
 /** Old shared backends omit both routing fields; partial or malformed routing is not compatible. */
 export function normalizeRemoteSessionSnapshot(value: unknown): SplitSession | null {
@@ -10,7 +11,8 @@ export function normalizeRemoteSessionSnapshot(value: unknown): SplitSession | n
   const normalized = !hasMode && !hasCollector
     ? { ...candidate, settlementMode: "direct", collectorParticipantId: "" }
     : candidate;
-  return isSplitSession(normalized) ? normalized : null;
+  const withAdjustments = addMissingReceiptAdjustments(normalized);
+  return isSplitSession(withAdjustments) ? withAdjustments : null;
 }
 
 /** Remote reads may complete out of order; never replace a newer session revision with an older one. */

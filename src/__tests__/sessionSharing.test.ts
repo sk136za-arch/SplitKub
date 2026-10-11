@@ -3,6 +3,7 @@ import type { SessionResult } from "../lib/calculateBill";
 import type { SplitSession } from "../types/bill";
 import { buildSessionShareText, qrDestinationKey, resolveQrRecipient, sessionSharingAvailability } from "../lib/share";
 import { createSessionSummaryImage, sessionSummaryImageCacheKey, sessionSummaryImageHeight } from "../lib/summaryImage";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 const session: SplitSession = {
   id: "bill", title: "วันเกิด", currency: "THB", revision: 2, expiresAt: "", settlementMode: "direct", collectorParticipantId: "",
@@ -11,20 +12,20 @@ const session: SplitSession = {
     { id: "b", name: "Boss", promptPay: "" },
   ],
   receipts: [
-    { id: "r1", title: "อาหาร", paidByParticipantId: "a", items: [{ id: "same", name: "ข้าว", price: 10000, participantIds: ["a", "b"] }] },
-    { id: "r2", title: "น้ำ", paidByParticipantId: "b", items: [{ id: "same", name: "ชา", price: 2000, participantIds: ["a", "b"] }] },
+    { id: "r1", title: "อาหาร", paidByParticipantId: "a", adjustments: defaultReceiptAdjustments(), items: [{ id: "same", name: "ข้าว", price: 10000, participantIds: ["a", "b"] }] },
+    { id: "r2", title: "น้ำ", paidByParticipantId: "b", adjustments: defaultReceiptAdjustments(), items: [{ id: "same", name: "ชา", price: 2000, participantIds: ["a", "b"] }] },
   ],
 };
 const result: SessionResult = {
   total: 12000,
   transfers: [{ fromParticipantId: "b", toParticipantId: "a", amount: 4000, kind: "direct", receiptBreakdown: [] }],
   receipts: [
-    { receiptId: "r1", title: "อาหาร", paidByParticipantId: "a", total: 10000 },
-    { receiptId: "r2", title: "น้ำ", paidByParticipantId: "b", total: 2000 },
+    { receiptId: "r1", title: "อาหาร", paidByParticipantId: "a", subtotal: 10000, preDiscount: 0, serviceCharge: 0, vat: 0, postDiscount: 0, total: 10000 },
+    { receiptId: "r2", title: "น้ำ", paidByParticipantId: "b", subtotal: 2000, preDiscount: 0, serviceCharge: 0, vat: 0, postDiscount: 0, total: 2000 },
   ],
   people: [
-    { participantId: "a", name: "Boss", paid: 10000, owed: 6000, net: 4000, total: 6000, breakdown: [{ receiptId: "r1", receiptTitle: "อาหาร", itemId: "same", itemName: "ข้าว", amount: 5000 }, { receiptId: "r2", receiptTitle: "น้ำ", itemId: "same", itemName: "ชา", amount: 1000 }] },
-    { participantId: "b", name: "Boss", paid: 2000, owed: 6000, net: -4000, total: 6000, breakdown: [{ receiptId: "r1", receiptTitle: "อาหาร", itemId: "same", itemName: "ข้าว", amount: 5000 }, { receiptId: "r2", receiptTitle: "น้ำ", itemId: "same", itemName: "ชา", amount: 1000 }] },
+    { participantId: "a", name: "Boss", paid: 10000, owed: 6000, net: 4000, total: 6000, breakdown: [{ receiptId: "r1", receiptTitle: "อาหาร", kind: "item", itemId: "same", itemName: "ข้าว", amount: 5000 }, { receiptId: "r2", receiptTitle: "น้ำ", kind: "item", itemId: "same", itemName: "ชา", amount: 1000 }] },
+    { participantId: "b", name: "Boss", paid: 2000, owed: 6000, net: -4000, total: 6000, breakdown: [{ receiptId: "r1", receiptTitle: "อาหาร", kind: "item", itemId: "same", itemName: "ข้าว", amount: 5000 }, { receiptId: "r2", receiptTitle: "น้ำ", kind: "item", itemId: "same", itemName: "ชา", amount: 1000 }] },
   ],
 };
 

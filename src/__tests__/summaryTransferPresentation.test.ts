@@ -5,12 +5,13 @@ import { buildSessionShareText } from "../lib/share";
 import { createSessionSummaryImage, sessionSummaryImageHeight } from "../lib/summaryImage";
 import { displayPaymentTotals, summaryTransferRows } from "../lib/summaryTransferPresentation";
 import type { SplitSession } from "../types/bill";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 function sharedItem(price: number, count = 3, payerId = "A"): SplitSession {
   const people = ["A", "B", "C", "D", "E"].slice(0, count);
   return {
     ...emptySession(), participants: people.map((id) => ({ id, name: id, promptPay: "" })),
-    receipts: [{ id: "r", title: "Receipt", paidByParticipantId: payerId,
+    receipts: [{ id: "r", title: "Receipt", paidByParticipantId: payerId, adjustments: defaultReceiptAdjustments(),
       items: [{ id: "i", name: "Item", price, participantIds: people }] }],
   };
 }
@@ -44,9 +45,9 @@ describe("consistent rounded payment presentation", () => {
     const session: SplitSession = {
       ...emptySession(), participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
       receipts: [
-        { id: "r1", title: "R1", paidByParticipantId: "A", items: [{ id: "i1", name: "I1", price: 3, participantIds: ["A", "B"] }] },
-        { id: "r2", title: "R2", paidByParticipantId: "C", items: [{ id: "i2", name: "I2", price: 5, participantIds: ["B", "C"] }] },
-        { id: "r3", title: "R3", paidByParticipantId: "A", items: [{ id: "i3", name: "I3", price: 1, participantIds: ["A", "B", "C"] }] },
+        { id: "r1", title: "R1", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i1", name: "I1", price: 3, participantIds: ["A", "B"] }] },
+        { id: "r2", title: "R2", paidByParticipantId: "C", adjustments: defaultReceiptAdjustments(), items: [{ id: "i2", name: "I2", price: 5, participantIds: ["B", "C"] }] },
+        { id: "r3", title: "R3", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i3", name: "I3", price: 1, participantIds: ["A", "B", "C"] }] },
       ],
     };
     const result = calculateBill(session);
@@ -77,7 +78,7 @@ describe("consistent rounded payment presentation", () => {
     const session: SplitSession = {
       ...emptySession(), participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
       receipts: ["A", "B"].map((payerId, index) => ({
-        id: `r${index}`, title: `Receipt ${index}`, paidByParticipantId: payerId,
+        id: `r${index}`, title: `Receipt ${index}`, paidByParticipantId: payerId, adjustments: defaultReceiptAdjustments(),
         items: [{ id: `i${index}`, name: "Item", price: 1, participantIds: ["A", "B", "C"] }],
       })),
     };
@@ -95,8 +96,8 @@ describe("consistent rounded payment presentation", () => {
       ...emptySession(), settlementMode: "collector", collectorParticipantId: "A",
       participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
       receipts: [
-        { id: "single", title: "Single", paidByParticipantId: "A", items: [{ id: "single-item", name: "Single", price: 1, participantIds: ["B"] }] },
-        ...[1, 2, 3, 4].map((index) => ({ id: `shared-${index}`, title: `Shared ${index}`, paidByParticipantId: "A", items: [{ id: `shared-item-${index}`, name: "Shared", price: 1, participantIds: ["A", "B", "C"] }] })),
+        { id: "single", title: "Single", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "single-item", name: "Single", price: 1, participantIds: ["B"] }] },
+        ...[1, 2, 3, 4].map((index) => ({ id: `shared-${index}`, title: `Shared ${index}`, paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: `shared-item-${index}`, name: "Shared", price: 1, participantIds: ["A", "B", "C"] }] })),
       ],
     };
     const result = calculateBill(session);
@@ -188,7 +189,7 @@ describe("consistent rounded payment presentation", () => {
   it("labels a person with no payment routes and retains their exact zero net", async () => {
     const session: SplitSession = {
       ...emptySession(), participants: ["A", "B", "C"].map((id) => ({ id, name: id, promptPay: "" })),
-      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "A", items: [{ id: "i", name: "Item", price: 10000, participantIds: ["A", "B"] }] }],
+      receipts: [{ id: "r", title: "Receipt", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Item", price: 10000, participantIds: ["A", "B"] }] }],
     };
     const result = calculateBill(session);
     class BrowserImage {

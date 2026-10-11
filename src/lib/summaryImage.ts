@@ -208,17 +208,17 @@ export async function createSummaryImage(result: BillResult, currency: Currency,
 export function sessionSummaryImageCacheKey(result: SessionResult, session: SplitSession, qrUrl: string, qrReceiverId = ""): string {
   return JSON.stringify([
     session.title, session.currency, session.settlementMode, session.collectorParticipantId, qrUrl, qrReceiverId, result.total,
-    result.receipts.map((receipt) => [receipt.receiptId, receipt.title, receipt.paidByParticipantId, receipt.total]),
+    result.receipts.map((receipt) => [receipt.receiptId, receipt.title, receipt.paidByParticipantId, receipt.subtotal, receipt.preDiscount, receipt.serviceCharge, receipt.vat, receipt.postDiscount, receipt.total]),
     result.people.map((person) => [person.participantId, person.name, person.paid, person.owed, person.net]),
     result.transfers.map((transfer) => [transfer.fromParticipantId, transfer.toParticipantId, transfer.amount, transfer.kind,
       transfer.receiptBreakdown.map((receipt) => [receipt.receiptId, receipt.receiptTitle, receipt.amount])]),
-    session.receipts.map((receipt) => [receipt.id, receipt.items.map((item) => [item.id, item.price, item.participantIds])]),
+    session.receipts.map((receipt) => [receipt.id, receipt.adjustments, receipt.items.map((item) => [item.id, item.price, item.participantIds])]),
     session.participants.map((person) => [person.id, person.promptPay]),
   ]);
 }
 
 export function sessionSummaryImageHeight(receiptCount: number, personCount: number, receiverCount: number, routeHeight = 0): number {
-  const height = 1080 + receiptCount * 90 + personCount * 160 + receiverCount * 58 + routeHeight;
+  const height = 1080 + receiptCount * 160 + personCount * 160 + receiverCount * 58 + routeHeight;
   if (height > MAX_HEIGHT) throw new Error("มีข้อมูลมากเกินไปสำหรับรูปเดียว");
   return height;
 }
@@ -266,13 +266,19 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
   ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText("ใบเสร็จ", 72, y);
   y += 26;
   for (const receipt of result.receipts) {
-    ctx.fillStyle = "#ffffff"; roundRect(ctx, 72, y, 936, 78, 16); ctx.fill();
+    ctx.fillStyle = "#ffffff"; roundRect(ctx, 72, y, 936, 148, 16); ctx.fill();
     ctx.fillStyle = "#25213b"; ctx.font = "bold 25px Arial, sans-serif";
     ctx.fillText(wrappedLines(ctx, receipt.title, 480)[0], 96, y + 36);
     ctx.fillStyle = "#5331aa"; ctx.textAlign = "right"; ctx.fillText(formatMoney(receipt.total, session.currency), 982, y + 36); ctx.textAlign = "left";
     ctx.fillStyle = "#726d82"; ctx.font = "20px Arial, sans-serif";
     ctx.fillText(`จ่ายโดย ${labels.get(receipt.paidByParticipantId) ?? "ยังไม่ระบุ"}`, 96, y + 67);
-    y += 90;
+    const adjustmentLine = `รายการ ${formatMoney(receipt.subtotal, session.currency)}`
+      + (receipt.preDiscount ? ` − ลดก่อน ${formatMoney(receipt.preDiscount, session.currency)}` : "")
+      + (receipt.serviceCharge ? ` + ค่าบริการ ${formatMoney(receipt.serviceCharge, session.currency)}` : "")
+      + (receipt.vat ? ` + VAT ${formatMoney(receipt.vat, session.currency)}` : "")
+      + (receipt.postDiscount ? ` − ลดหลัง ${formatMoney(receipt.postDiscount, session.currency)}` : "");
+    wrappedLines(ctx, adjustmentLine, 850).forEach((line, index) => ctx.fillText(line, 96, y + 99 + index * 25));
+    y += 160;
   }
 
   y += 25;

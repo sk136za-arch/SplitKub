@@ -1,4 +1,5 @@
-import type { Bill, Currency, Receipt, SplitSession } from "@/types/bill";
+import type { Bill, Currency, Receipt, ReceiptAdjustments, SplitSession } from "@/types/bill";
+import { defaultReceiptAdjustments, isReceiptAdjustments } from "./receiptAdjustments";
 
 export const emptyBill = (): Bill => ({ currency: "THB", participants: [], items: [], promptPay: "" });
 
@@ -52,6 +53,7 @@ export type SessionAction =
   | { type: "edit-receipt"; id: string; title: string }
   | { type: "remove-receipt"; id: string }
   | { type: "set-receipt-payer"; receiptId: string; paidByParticipantId: string }
+  | { type: "set-receipt-adjustments"; receiptId: string; adjustments: ReceiptAdjustments }
   | { type: "add-item"; receiptId: string; id: string; name: string; price: number }
   | { type: "edit-item"; receiptId: string; id: string; name: string; price: number }
   | { type: "remove-item"; receiptId: string; id: string }
@@ -92,10 +94,11 @@ export function sessionReducer(session: SplitSession, action: SessionAction): Sp
         items: receipt.items.map((item) => ({ ...item, participantIds: item.participantIds.filter((id) => id !== action.id) })),
       })),
     };
-    case "add-receipt": return !action.id || !action.title.trim() || session.receipts.some((receipt) => receipt.id === action.id) || (action.paidByParticipantId && !session.participants.some((person) => person.id === action.paidByParticipantId)) ? session : { ...session, receipts: [...session.receipts, { id: action.id, title: action.title, paidByParticipantId: action.paidByParticipantId ?? "", items: [] }] };
+    case "add-receipt": return !action.id || !action.title.trim() || session.receipts.some((receipt) => receipt.id === action.id) || (action.paidByParticipantId && !session.participants.some((person) => person.id === action.paidByParticipantId)) ? session : { ...session, receipts: [...session.receipts, { id: action.id, title: action.title, paidByParticipantId: action.paidByParticipantId ?? "", adjustments: defaultReceiptAdjustments(), items: [] }] };
     case "edit-receipt": return !action.title.trim() ? session : updateReceipt(session, action.id, (receipt) => ({ ...receipt, title: action.title }));
     case "remove-receipt": return { ...session, receipts: session.receipts.filter((receipt) => receipt.id !== action.id) };
     case "set-receipt-payer": return action.paidByParticipantId && !session.participants.some((person) => person.id === action.paidByParticipantId) ? session : updateReceipt(session, action.receiptId, (receipt) => ({ ...receipt, paidByParticipantId: action.paidByParticipantId }));
+    case "set-receipt-adjustments": return !isReceiptAdjustments(action.adjustments) ? session : updateReceipt(session, action.receiptId, (receipt) => ({ ...receipt, adjustments: { ...action.adjustments } }));
     case "add-item": return !action.id || !action.name.trim() || !Number.isSafeInteger(action.price) || action.price <= 0 ? session : updateReceipt(session, action.receiptId, (receipt) => receipt.items.some((item) => item.id === action.id) ? receipt : { ...receipt, items: [...receipt.items, { id: action.id, name: action.name, price: action.price, participantIds: session.participants.map((person) => person.id) }] });
     case "edit-item": return !action.name.trim() || !Number.isSafeInteger(action.price) || action.price <= 0 ? session : updateReceipt(session, action.receiptId, (receipt) => ({ ...receipt, items: receipt.items.map((item) => item.id === action.id ? { ...item, name: action.name, price: action.price } : item) }));
     case "remove-item": return updateReceipt(session, action.receiptId, (receipt) => ({ ...receipt, items: receipt.items.filter((item) => item.id !== action.id) }));

@@ -1,8 +1,9 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import type { SplitSession } from "../../types/bill";
+import type { ReceiptAdjustments, SplitSession } from "../../types/bill";
 import { sessionReducer, type SessionAction } from "../billState";
 import { isSplitSession } from "../storage";
 import { normalizeRemoteSessionSnapshot } from "../sharedSnapshot";
+import { sessionHasNonDefaultAdjustments } from "../receiptAdjustments";
 import { getSharedBillClient, sharedBillAvailable as clientIsConfigured } from "./client";
 
 export interface SharedBillSnapshot {
@@ -66,9 +67,12 @@ export async function createSharedBill(session: SplitSession): Promise<SharedBil
   const client = getClient();
   await ensureAnonymousSession(client);
   if (session.settlementMode === "collector") await ensureSettlementRoutingSupported(client);
+  const needsAdjustmentCapability = sessionHasNonDefaultAdjustments(session);
+  if (needsAdjustmentCapability) await ensureReceiptAdjustmentsSupported(client);
   const result = await callRpc(client, "create_shared_bill", { p_session: session });
   const created = assertCreated(result);
   if (session.settlementMode === "collector") assertCollectorPreserved(session, created.snapshot);
+  if (needsAdjustmentCapability) assertAdjustmentsPreserved(session, created.snapshot);
   return created;
 }
 
@@ -139,12 +143,15 @@ export async function applyOwnerAction(
   const session: SplitSession = { ...updated, id: current.snapshot.id, revision: expectedRevision, expiresAt: current.snapshot.expiresAt };
   assertSession(session);
   if (session.settlementMode === "collector") await ensureSettlementRoutingSupported(client);
+  const needsAdjustmentCapability = sessionHasNonDefaultAdjustments(session) || action.type === "set-receipt-adjustments";
+  if (needsAdjustmentCapability) await ensureReceiptAdjustmentsSupported(client);
   const saved = assertRemoteSession(await callRpc(client, "apply_owner_action", {
     p_bill_id: billId,
     p_expected_revision: expectedRevision,
     p_session: session,
   }));
   if (session.settlementMode === "collector") assertCollectorPreserved(session, saved);
+  if (needsAdjustmentCapability) assertAdjustmentsPreserved(session, saved);
   return saved;
 }
 
@@ -276,6 +283,24 @@ async function ensureSettlementRoutingSupported(client: ReturnType<typeof getSha
   if (!isRecord(capabilities) || typeof capabilities.settlementRoutingVersion !== "number" ||
       !Number.isSafeInteger(capabilities.settlementRoutingVersion) || capabilities.settlementRoutingVersion < 1) {
     throw new SharedBillError("migration_required", "Apply the latest shared-bill database migration before using collector mode.");
+  }
+}
+
+async function ensureReceiptAdjustmentsSupported(client: ReturnType<typeof getSharedBillClient>): Promise<void> {
+  const capabilities = await callRpc(client, "shared_bill_capabilities", {});
+  if (!isRecord(capabilities) || !Number.isSafeInteger(capabilities.receiptAdjustmentsVersion)
+    || (capabilities.receiptAdjustmentsVersion as number) < 1) {
+    throw new SharedBillError("migration_required", "Apply the receipt adjustments migration before sharing adjusted receipts.");
+  }
+}
+
+function assertAdjustmentsPreserved(requested: SplitSession, saved: SplitSession): void {
+  const fields: (keyof ReceiptAdjustments)[] = ["vatEnabled", "vatRateBps", "serviceChargeEnabled", "serviceChargeRateBps", "preDiscountEnabled", "preDiscount", "postDiscountEnabled", "postDiscount"];
+  for (const receipt of requested.receipts) {
+    const stored = saved.receipts.find((candidate) => candidate.id === receipt.id);
+    if (!stored || !fields.every((field) => stored.adjustments[field] === receipt.adjustments[field])) {
+      throw new SharedBillError("migration_required", "The shared-bill service did not preserve receipt adjustments.");
+    }
   }
 }
 

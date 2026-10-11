@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { calculateBill, settlementDestinations } from "../lib/calculateBill";
 import { emptySession, sessionReducer } from "../lib/billState";
 import type { SplitSession } from "../types/bill";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 function fixture(): SplitSession {
   return {
     ...emptySession(), participants: ["A", "B", "C", "D"].map((name) => ({ id: name, name, promptPay: "" })),
     receipts: [
-      { id: "r1", title: "Food", paidByParticipantId: "A", items: [{ id: "i1", name: "Food", price: 60, participantIds: ["C", "D"] }] },
-      { id: "r2", title: "Drinks", paidByParticipantId: "B", items: [{ id: "i2", name: "Drinks", price: 20, participantIds: ["C"] }] },
+      { id: "r1", title: "Food", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i1", name: "Food", price: 60, participantIds: ["C", "D"] }] },
+      { id: "r2", title: "Drinks", paidByParticipantId: "B", adjustments: defaultReceiptAdjustments(), items: [{ id: "i2", name: "Drinks", price: 20, participantIds: ["C"] }] },
     ],
   };
 }
@@ -40,9 +41,9 @@ describe("settlement routing", () => {
       ...emptySession(), settlementMode: "collector", collectorParticipantId: "A",
       participants: ["A", "B", "C"].map((name) => ({ id: name, name, promptPay: "" })),
       receipts: [
-        { id: "r1", title: "Food", paidByParticipantId: "B", items: [{ id: "i1", name: "Food", price: 12000, participantIds: ["A", "B", "C"] }] },
-        { id: "r2", title: "Drinks", paidByParticipantId: "C", items: [{ id: "i2", name: "Drinks", price: 6000, participantIds: ["A", "C"] }] },
-        { id: "r3", title: "Taxi", paidByParticipantId: "A", items: [{ id: "i3", name: "Taxi", price: 3000, participantIds: ["A", "B"] }] },
+        { id: "r1", title: "Food", paidByParticipantId: "B", adjustments: defaultReceiptAdjustments(), items: [{ id: "i1", name: "Food", price: 12000, participantIds: ["A", "B", "C"] }] },
+        { id: "r2", title: "Drinks", paidByParticipantId: "C", adjustments: defaultReceiptAdjustments(), items: [{ id: "i2", name: "Drinks", price: 6000, participantIds: ["A", "C"] }] },
+        { id: "r3", title: "Taxi", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i3", name: "Taxi", price: 3000, participantIds: ["A", "B"] }] },
       ],
     };
     const result = expectBalanced(session);
@@ -58,7 +59,7 @@ describe("settlement routing", () => {
   it("omits zero and self routes, including balanced sessions", () => {
     const session: SplitSession = {
       ...emptySession(), participants: [{ id: "A", name: "A", promptPay: "" }],
-      receipts: [{ id: "r", title: "Solo", paidByParticipantId: "A", items: [{ id: "i", name: "Solo", price: 1, participantIds: ["A"] }] }],
+      receipts: [{ id: "r", title: "Solo", paidByParticipantId: "A", adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Solo", price: 1, participantIds: ["A"] }] }],
     };
     expect(expectBalanced(session).transfers).toEqual([]);
     session.settlementMode = "collector";

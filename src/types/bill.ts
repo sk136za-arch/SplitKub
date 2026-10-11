@@ -13,11 +13,22 @@ export interface Bill {
 }
 
 export interface SessionParticipant extends Participant { promptPay: string }
+export interface ReceiptAdjustments {
+  vatEnabled: boolean;
+  vatRateBps: number;
+  serviceChargeEnabled: boolean;
+  serviceChargeRateBps: number;
+  preDiscountEnabled: boolean;
+  preDiscount: Money;
+  postDiscountEnabled: boolean;
+  postDiscount: Money;
+}
 export interface Receipt {
   id: string;
   title: string;
   /** Empty only while a draft or migrated receipt awaits payer selection. */
   paidByParticipantId: string;
+  adjustments: ReceiptAdjustments;
   items: BillItem[];
 }
 export interface SplitSession {

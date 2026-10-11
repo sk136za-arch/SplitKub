@@ -414,10 +414,11 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
       <section id="receipts" className="scroll-mt-5 space-y-5">
         <div className="card p-5 sm:p-7"><h2 className="section-title">ใบเสร็จ</h2><p className="muted mt-1 text-sm">แต่ละใบเลือกคนจ่ายก่อน แล้วเพิ่มรายการและผู้ร่วมจ่าย</p><form onSubmit={(event) => { event.preventDefault(); if (!receiptTitle.trim()) { setFormError("กรุณาใส่ชื่อใบเสร็จ"); return; } void commit({ type: "add-receipt", id: createClientId(), title: receiptTitle.trim() }).then((ok) => { if (ok) setReceiptTitle(""); }); }} className="mt-4 flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><label htmlFor="new-receipt" className="mb-1 block text-sm font-bold">ชื่อใบเสร็จใหม่</label><input id="new-receipt" className="field" value={receiptTitle} onChange={(event) => { setReceiptTitle(event.target.value); setFormError(""); }} placeholder="เช่น ร้านอาหาร" disabled={!canEdit}/></div><button className="btn-primary" disabled={!canEdit}>+ เพิ่มใบเสร็จ</button></form>{session.receipts.length === 0 && <p className="muted mt-5 rounded-xl bg-[#f8f6fd] p-4 text-sm">ยังไม่มีใบเสร็จ</p>}</div>
         {session.receipts.map((receipt) => <ReceiptEditor
-          key={`${receipt.id}:${receipt.title}`} receipt={receipt} participants={session.participants} currency={session.currency} disabled={!canEdit}
+          key={`${receipt.id}:${receipt.title}:${JSON.stringify(receipt.adjustments)}`} receipt={receipt} session={session} participants={session.participants} currency={session.currency} disabled={!canEdit}
           onRename={(title) => commit({ type: "edit-receipt", id: receipt.id, title })}
           onRemove={() => void commit({ type: "remove-receipt", id: receipt.id })}
           onSetPayer={(paidByParticipantId) => void commit({ type: "set-receipt-payer", receiptId: receipt.id, paidByParticipantId })}
+          onSetAdjustments={(adjustments) => commit({ type: "set-receipt-adjustments", receiptId: receipt.id, adjustments })}
           onAddItem={(name, price) => commit({ type: "add-item", receiptId: receipt.id, id: createClientId(), name, price })}
           onEditItem={(id, name, price) => commit({ type: "edit-item", receiptId: receipt.id, id, name, price })}
           onRemoveItem={(id) => void commit({ type: "remove-item", receiptId: receipt.id, id })}

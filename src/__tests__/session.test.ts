@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { calculateBill } from "../lib/calculateBill";
 import { emptySession, sessionReducer } from "../lib/billState";
 import type { SplitSession } from "../types/bill";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 const people = [
   { id: "a", name: "A", promptPay: "" },
@@ -11,8 +12,8 @@ const people = [
 function example(): SplitSession {
   return {
     ...emptySession(), participants: people, receipts: [
-      { id: "r1", title: "Lunch", paidByParticipantId: "a", items: [{ id: "food", name: "Food", price: 10001, participantIds: ["c", "a", "b"] }] },
-      { id: "r2", title: "Drinks", paidByParticipantId: "b", items: [{ id: "drinks", name: "Drinks", price: 6000, participantIds: ["a", "b"] }] },
+      { id: "r1", title: "Lunch", paidByParticipantId: "a", adjustments: defaultReceiptAdjustments(), items: [{ id: "food", name: "Food", price: 10001, participantIds: ["c", "a", "b"] }] },
+      { id: "r2", title: "Drinks", paidByParticipantId: "b", adjustments: defaultReceiptAdjustments(), items: [{ id: "drinks", name: "Drinks", price: 6000, participantIds: ["a", "b"] }] },
     ],
   };
 }
@@ -26,8 +27,8 @@ describe("session calculation", () => {
       [10001, 6334, 3667], [6000, 6334, -334], [0, 3333, -3333],
     ]);
     expect(result.people[0].breakdown).toEqual([
-      { receiptId: "r1", receiptTitle: "Lunch", itemId: "food", itemName: "Food", amount: 3334 },
-      { receiptId: "r2", receiptTitle: "Drinks", itemId: "drinks", itemName: "Drinks", amount: 3000 },
+      { receiptId: "r1", receiptTitle: "Lunch", kind: "item", itemId: "food", itemName: "Food", amount: 3334 },
+      { receiptId: "r2", receiptTitle: "Drinks", kind: "item", itemId: "drinks", itemName: "Drinks", amount: 3000 },
     ]);
     expect(result.people.reduce((sum, person) => sum + person.paid, 0)).toBe(result.total);
     expect(result.people.reduce((sum, person) => sum + person.owed, 0)).toBe(result.total);
@@ -35,7 +36,7 @@ describe("session calculation", () => {
   });
   it("assigns one minor unit to the first participant in bill order", () => {
     const session = example();
-    session.receipts = [{ id: "r", title: "Tiny", paidByParticipantId: "c", items: [{ id: "i", name: "Tiny", price: 1, participantIds: ["c", "b", "a"] }] }];
+    session.receipts = [{ id: "r", title: "Tiny", paidByParticipantId: "c", adjustments: defaultReceiptAdjustments(), items: [{ id: "i", name: "Tiny", price: 1, participantIds: ["c", "b", "a"] }] }];
     const result = calculateBill(session);
     expect(result.people.map((person) => person.owed)).toEqual([1, 0, 0]);
     expect(result.people.map((person) => person.net)).toEqual([-1, 0, 1]);

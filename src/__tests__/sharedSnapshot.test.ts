@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { emptySession } from "../lib/billState";
 import { normalizeRemoteSessionSnapshot, shouldApplyRemoteRevision } from "../lib/sharedSnapshot";
+import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 describe("remote session revision ordering", () => {
   it("accepts equal or newer snapshots and rejects late older responses", () => {
@@ -29,5 +30,18 @@ describe("remote routing snapshot compatibility", () => {
     delete partial.collectorParticipantId;
     expect(normalizeRemoteSessionSnapshot(partial)).toBeNull();
     expect(normalizeRemoteSessionSnapshot({ ...collector, collectorParticipantId: "other" })).toBeNull();
+  });
+});
+
+describe("remote receipt adjustment compatibility", () => {
+  it("defaults a wholly absent adjustment field without mutating the old snapshot", () => {
+    const old = { ...emptySession(), receipts: [{ id: "r", title: "R", paidByParticipantId: "", items: [] }] };
+    expect(normalizeRemoteSessionSnapshot(old)?.receipts[0].adjustments).toEqual(defaultReceiptAdjustments());
+    expect(old.receipts[0]).not.toHaveProperty("adjustments");
+  });
+  it("rejects malformed or partial adjustment fields", () => {
+    const receipt = { id: "r", title: "R", paidByParticipantId: "", items: [] };
+    expect(normalizeRemoteSessionSnapshot({ ...emptySession(), receipts: [{ ...receipt, adjustments: { vatEnabled: true } }] })).toBeNull();
+    expect(normalizeRemoteSessionSnapshot({ ...emptySession(), receipts: [{ ...receipt, adjustments: null }] })).toBeNull();
   });
 });

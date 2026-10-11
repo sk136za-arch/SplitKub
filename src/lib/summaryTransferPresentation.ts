@@ -1,5 +1,6 @@
 import type { SessionResult, SettlementTransfer } from "./calculateBill";
 import type { SplitSession } from "../types/bill";
+import { sessionHasEnabledAdjustments } from "./receiptAdjustments";
 
 type Fraction = { numerator: bigint; denominator: bigint };
 export type SummaryTransferRow = SettlementTransfer;
@@ -47,9 +48,16 @@ function safeAddMinorUnits(left: number, right: number): number {
 }
 
 /** Exact pre-allocation shares, using integer minor units and rational arithmetic only. */
-function rawOwed(session: SplitSession): Map<string, Fraction> {
+function rawOwed(session: SplitSession, result: SessionResult): Map<string, Fraction> {
   const owed = new Map(session.participants.map((person) => [person.id, ZERO]));
   for (const receipt of session.receipts) {
+    if (sessionHasEnabledAdjustments({ ...session, receipts: [receipt] })) {
+      for (const person of result.people) {
+        const amount = person.breakdown.filter((row) => row.receiptId === receipt.id).reduce((sum, row) => sum + row.amount, 0);
+        owed.set(person.participantId, add(owed.get(person.participantId) ?? ZERO, fraction(BigInt(amount), BigInt(1))));
+      }
+      continue;
+    }
     for (const item of receipt.items) {
       const share = fraction(BigInt(item.price), BigInt(item.participantIds.length));
       for (const id of item.participantIds) owed.set(id, add(owed.get(id) ?? ZERO, share));
@@ -60,7 +68,7 @@ function rawOwed(session: SplitSession): Map<string, Fraction> {
 
 /** Display amounts keep the ledger route graph and only round up existing rows. */
 export function summaryTransferRows(session: SplitSession, result: SessionResult): SummaryTransferRow[] {
-  const owed = rawOwed(session);
+  const owed = rawOwed(session, result);
   if (session.settlementMode === "collector") {
     return result.transfers.map((transfer) => {
       if (transfer.kind !== "collection") return transfer;
