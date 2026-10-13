@@ -8,15 +8,16 @@ import { calculateBill, settlementDestinations } from "@/lib/calculateBill";
 import { createClientId } from "@/lib/id";
 import { isValidPromptPay } from "@/lib/promptpay";
 import { clearSessionStorage, dismissSessionMigrationNotice, loadSessionSafely, pendingLegacyPromptPay as readPendingLegacyPromptPay, resolveStorageSafely, saveAssignedLegacyPromptPay, saveConfirmedRemoteSession, saveSession, sessionMigrationNotice, shouldPersistSession } from "@/lib/storage";
-import { shouldApplyRemoteRevision } from "@/lib/sharedSnapshot";
+import { shouldApplyRemoteSnapshot } from "@/lib/sharedSnapshot";
 import { ephemeralOwnerCapability, type OwnerCapability } from "@/lib/sharedLinkRouting";
 import { participantLabels } from "@/lib/participantLabels";
 import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive } from "@/lib/sharedSubscription";
 import { buildSessionShareText, copyTextWithFallback, isShareCancelled, prepareNativeShareFile, qrDestinationKey, resolveQrRecipient, sessionSharingAvailability, type QrRecipientSelection } from "@/lib/share";
 import { createSessionSummaryImage, preparedImageMatchesKey, sessionSummaryImageCacheKey } from "@/lib/summaryImage";
-import { createSharedSession, openSharedBill, refreshSharedBill, saveSharedOwnerAction, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, type SharedCreated, type SharedOpen } from "@/hooks/sharedBillAdapter";
+import { closeSharedSession, confirmSharedParticipant, createSharedSession, openSharedBill, refreshSharedBill, saveSharedOwnerAction, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, type SharedCreated, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import type { Currency, SessionParticipant } from "@/types/bill";
 import { ReceiptEditor } from "./ReceiptEditor";
+import { OwnerReviewCard } from "./OwnerReviewCard";
 import { SessionSummary } from "./SessionSummary";
 import { SettlementSettings } from "./SettlementSettings";
 import { SuccessToast, type ToastMessage } from "./SuccessToast";
@@ -91,11 +92,57 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
   const toastId = useRef(0);
   const pendingRef = useRef(false);
   const latestRevision = useRef(0);
+  const latestConfirmationRevision = useRef(0);
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [closeError, setCloseError] = useState("");
+  const [acknowledgeIncomplete, setAcknowledgeIncomplete] = useState(false);
+  const [reviewParticipantId, setReviewParticipantId] = useState("");
+  const closeTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeCancelRef = useRef<HTMLButtonElement>(null);
+  const closeDialogRef = useRef<HTMLDivElement>(null);
+  const closeWasOpenRef = useRef(false);
   const remoteGeneration = useRef(0);
   const refreshInFlight = useRef<{ billId: string; generation: number; dirty: boolean; promise: Promise<boolean> } | null>(null);
   const subscribedGeneration = useRef(-1);
   const [subscriptionController] = useState(() => new SharedSubscriptionController(subscribeSharedBill));
   const dismissToast = useCallback(() => setToast(null), []);
+
+  useEffect(() => {
+    if (closeDialogOpen) {
+      closeWasOpenRef.current = true;
+      closeCancelRef.current?.focus();
+    } else if (closeWasOpenRef.current) {
+      closeWasOpenRef.current = false;
+      closeTriggerRef.current?.focus();
+    }
+    if (!closeDialogOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !pendingRef.current) setCloseDialogOpen(false);
+      if (event.key !== "Tab") return;
+      const dialog = closeDialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => element.getAttribute("aria-hidden") !== "true");
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeDialogOpen]);
 
   function notifySuccess(text: string) { toastId.current += 1; setToast({ id: toastId.current, text }); }
   // The callback intentionally coordinates mutable generation/request refs across async refreshes.
@@ -111,8 +158,9 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
         try {
           const next = await refreshSharedBill(billId);
           if (generation !== remoteGeneration.current) return false;
-          if (shouldApplyRemoteRevision(latestRevision.current, next.revision)) {
+          if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, next)) {
             latestRevision.current = next.revision;
+            latestConfirmationRevision.current = next.confirmationRevision;
             rawDispatch({ type: "restore", session: next });
           }
           setActionMessage("");
@@ -164,10 +212,10 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
     const openedFromHash = window.location.hash;
     try {
       const storage = resolveStorageSafely(() => window.localStorage);
-      if (recovery || joinedOwner) latestRevision.current = -1;
+      if (recovery || joinedOwner) { latestRevision.current = -1; latestConfirmationRevision.current = -1; }
       const saved = recovery || joinedOwner || !storage ? null : loadSessionSafely(() => storage!);
       if (saved) {
-        rawDispatch({ type: "restore", session: saved }); setStarted(true); latestRevision.current = saved.revision;
+        rawDispatch({ type: "restore", session: saved }); setStarted(true); latestRevision.current = saved.revision; latestConfirmationRevision.current = saved.confirmationRevision;
       }
       setTitleDraft(saved?.title ?? emptySession().title);
       if (storage && !recovery && !joinedOwner) {
@@ -178,6 +226,7 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
       if (joinedOwner) {
         const capability = ephemeralOwnerCapability(joinedOwner);
         latestRevision.current = joinedOwner.snapshot.revision;
+        latestConfirmationRevision.current = joinedOwner.snapshot.confirmationRevision;
         rawDispatch({ type: "restore", session: joinedOwner.snapshot });
         setTitleDraft(joinedOwner.snapshot.title);
         setStarted(true);
@@ -195,8 +244,9 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
           if (cancelled || (recovery && window.location.hash !== openedFromHash)) return;
           const resolved = { ...capability, billId: opened.billId };
           setOwner(resolved);
-          if (shouldApplyRemoteRevision(latestRevision.current, opened.snapshot.revision)) {
+          if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, opened.snapshot)) {
             latestRevision.current = opened.snapshot.revision;
+            latestConfirmationRevision.current = opened.snapshot.confirmationRevision;
             rawDispatch({ type: "restore", session: opened.snapshot });
             setTitleDraft(opened.snapshot.title);
             setStarted(true);
@@ -241,14 +291,16 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
 
   async function commit(action: SessionAction): Promise<boolean> {
     if (pendingRef.current) return false;
+    if (session.closedAt) { setActionMessage("บิลนี้ปิดแล้ว แก้ไขไม่ได้"); return false; }
     setActionMessage(""); setManualCopyText(""); dismissToast();
     if (!owner) { rawDispatch(action); return true; }
     if (!owner.billId || remoteStatus !== "live") { setActionMessage("ข้อมูลออนไลน์ยังไม่พร้อม กรุณาโหลดใหม่ก่อนแก้ไข"); return false; }
     pendingRef.current = true; setPending(true);
     try {
       const next = await saveSharedOwnerAction(owner.billId, latestRevision.current, action);
-      if (shouldApplyRemoteRevision(latestRevision.current, next.revision)) {
+      if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, next)) {
         latestRevision.current = next.revision;
+        latestConfirmationRevision.current = next.confirmationRevision;
         rawDispatch({ type: "restore", session: next });
       } else await refreshRemote(owner.billId);
       return true;
@@ -279,8 +331,10 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
       const created: SharedCreated = await createSharedSession(session);
       const capability = { publicId: created.publicId, billId: created.billId, ownerToken: created.ownerToken, friendToken: created.friendToken };
       latestRevision.current = -1;
-      if (shouldApplyRemoteRevision(latestRevision.current, created.snapshot.revision)) {
+      latestConfirmationRevision.current = -1;
+      if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, created.snapshot)) {
         latestRevision.current = created.snapshot.revision;
+        latestConfirmationRevision.current = created.snapshot.confirmationRevision;
         rawDispatch({ type: "restore", session: created.snapshot });
       }
       setOwner(capability); setRemoteStatus("connecting");
@@ -335,7 +389,7 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
 
   const result = useMemo(() => { try { return calculateBill(session); } catch { return null; } }, [session]);
   const calculationError = useMemo(() => { try { calculateBill(session); return ""; } catch (caught) { return caught instanceof Error ? caught.message : "ข้อมูลบิลยังไม่ครบ"; } }, [session]);
-  const canEdit = !pending && (!owner || remoteStatus === "live");
+  const canEdit = !session.closedAt && !pending && (!owner || remoteStatus === "live");
   const itemCount = session.receipts.reduce((count, receipt) => count + receipt.items.length, 0);
   const canCreateLink = !pendingLegacyPromptPay && session.participants.length > 0 && session.receipts.length > 0 && session.receipts.every((receipt) => receipt.paidByParticipantId && receipt.items.length > 0);
   const destinationIds = result ? settlementDestinations(result, session) : [];
@@ -389,6 +443,33 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
     finally { setSharingImage(false); }
   }
 
+  async function confirmPerson(confirmed: boolean) {
+    if (!owner?.billId || !canEdit || pendingRef.current || !reviewParticipantId) return;
+    pendingRef.current = true; setPending(true); setActionMessage("");
+    try {
+      const next = await confirmSharedParticipant(owner.billId, reviewParticipantId, confirmed, latestRevision.current);
+      if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, next)) {
+        latestRevision.current = next.revision; latestConfirmationRevision.current = next.confirmationRevision;
+        rawDispatch({ type: "restore", session: next });
+      }
+    } catch (caught) { await refreshRemote(owner.billId); setActionMessage(sharedErrorMessage(caught)); }
+    finally { pendingRef.current = false; setPending(false); }
+  }
+
+  async function closeBill() {
+    if (!owner?.billId || !canEdit || pendingRef.current) return;
+    pendingRef.current = true; setPending(true); setCloseError(""); setActionMessage("");
+    try {
+      const next = await closeSharedSession(owner.billId, latestRevision.current, acknowledgeIncomplete);
+      if (shouldApplyRemoteSnapshot({ revision: latestRevision.current, confirmationRevision: latestConfirmationRevision.current }, next)) {
+        latestRevision.current = next.revision; latestConfirmationRevision.current = next.confirmationRevision;
+        rawDispatch({ type: "restore", session: next });
+      }
+      setCloseDialogOpen(false); setAcknowledgeIncomplete(false); setCloseError(""); notifySuccess("ปิดบิลแล้ว");
+    } catch (caught) { const message = sharedErrorMessage(caught); setCloseError(message); setActionMessage(message); await refreshRemote(owner.billId); }
+    finally { pendingRef.current = false; setPending(false); }
+  }
+
   const copySuccessMessage = destinationIds.length === 0 ? "คัดลอกสรุปบิลแล้ว" : "คัดลอกสรุปบิลและเลข PromptPay แล้ว";
   const copyHelperText = session.currency === "USD"
     ? "USD ใช้รูปสรุปพร้อม QR สำหรับช่องทางชำระเงิน"
@@ -401,12 +482,14 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
   if (!ready) return <main className="shell py-16"><p role="status" className="muted">กำลังเปิดบิล…</p></main>;
   const friendUrl = owner?.friendToken ? `${window.location.origin}/b/${encodeURIComponent(owner.publicId)}#token=${encodeURIComponent(owner.friendToken)}` : "";
   const ownerUrl = owner?.ownerToken ? `${window.location.origin}/b/${encodeURIComponent(owner.publicId)}#owner=${encodeURIComponent(owner.ownerToken)}` : "";
+  const incompletePeople = session.participants.filter((person) =>
+    !session.confirmations.some((status) => status.participantId === person.id && status.confirmedContentRevision === session.revision));
 
   return <main>
     <header className="border-b border-[#e9e4f7] bg-white/80"><div className="shell flex min-h-18 items-center justify-between py-4"><a href="#top" className="inline-flex min-h-11 items-center gap-2 text-xl font-black tracking-tight text-[#5331aa]"><Image src="/brand/splitkub-icon.png" width={44} height={44} alt="" className="h-11 w-11 shrink-0 object-contain" priority/>SplitKub</a><span className="rounded-full bg-[#f1ecff] px-3 py-2 text-xs font-bold text-[#6040ac]">ฟรี · ไม่ต้องสมัครสมาชิก</span></div></header>
     {migrationWarning && <div className="shell pt-4"><div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><p>{migrationWarning}</p>{pendingLegacyPromptPay && <div className="mt-3 flex flex-wrap items-end gap-2"><div className="min-w-52 flex-1"><label htmlFor="migration-promptpay-person" className="mb-1 block font-bold">กำหนดเลขนี้ให้คนที่รับเงิน</label><select id="migration-promptpay-person" className="field" value={migrationParticipantId} onChange={(event) => setMigrationParticipantId(event.target.value)} disabled={pending}><option value="">เลือกคน</option>{session.participants.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></div><button type="button" className="btn-primary" onClick={() => void assignLegacyPromptPay()} disabled={!migrationParticipantId || pending || Boolean(owner && remoteStatus !== "live")}>กำหนดเลขให้คนนี้</button><button type="button" className="btn-secondary" onClick={discardLegacyPromptPay} disabled={pending}>ทิ้งเลขเดิมนี้</button></div>}</div></div>}
     {!started ? <section id="top" className="shell flex min-h-[75vh] flex-col items-center justify-center py-12 text-center"><div className="mb-5 flex h-64 w-64 items-center justify-center rounded-[2rem] bg-white shadow-sm sm:h-72 sm:w-72"><Image src="/brand/splitkub-mascot.png" width={288} height={288} alt="มาสคอตพนักงาน SplitKub ยิ้มต้อนรับ" className="h-full w-full object-contain" priority/></div><p className="eyebrow">Split smarter, smile more</p><h1 className="mt-4 max-w-2xl text-4xl leading-tight font-black tracking-tight sm:text-6xl">หารหลายบิล<br/><span className="text-[#7350d1]">จบในที่เดียว</span></h1><p className="muted mt-6 max-w-lg text-lg leading-8">เพิ่มหลายใบเสร็จ ระบุคนออกเงิน ให้เพื่อนเลือกของที่ร่วมจ่าย แล้วดูยอดสุทธิได้ทันที</p><button className="btn-primary mt-9 px-8 text-lg" onClick={() => setStarted(true)}>เริ่มหารบิล →</button><p className="muted mt-5 text-sm">ไม่ต้องล็อกอิน · บันทึกฉบับร่างใน browser ของคุณ</p></section> : <div id="top" className="shell space-y-6 pb-20">
-      <div className="flex flex-wrap items-center justify-between gap-4 py-8"><div><p className="eyebrow">Your split session</p><h1 className="mt-1 break-words text-3xl font-black tracking-tight">{session.title} ✨</h1><p className="muted mt-1 text-sm">เพิ่มคน ใบเสร็จ และรายการ แล้วดูว่าใครจ่ายไปเท่าไร</p></div><button className="btn-danger" onClick={newBill}>เริ่มบิลใหม่</button></div>
+      <div className="flex flex-wrap items-center justify-between gap-4 py-8"><div><p className="eyebrow">Your split session</p><h1 className="mt-1 break-words text-3xl font-black tracking-tight">{session.title} ✨</h1><p className="muted mt-1 text-sm">เพิ่มคน ใบเสร็จ และรายการ แล้วดูว่าใครจ่ายไปเท่าไร</p>{session.closedAt && <p role="status" className="mt-2 inline-block rounded-full bg-[#eee9fa] px-3 py-1 text-sm font-bold">ปิดบิลแล้ว · อ่านได้อย่างเดียว</p>}</div><button className="btn-danger" onClick={newBill}>เริ่มบิลใหม่</button></div>
       <nav aria-label="ขั้นตอนการหารบิล" className="flex gap-2 overflow-x-auto pb-2 text-sm"><a className="chip whitespace-nowrap" href="#setup">1 ตั้งค่าบิล</a><a className="chip whitespace-nowrap" href="#people">2 คนร่วมบิล</a><a className="chip whitespace-nowrap" href="#receipts">3 ใบเสร็จ</a><a className="chip whitespace-nowrap" href="#summary">4 สรุปและแชร์</a></nav>
       <section id="setup" className="card scroll-mt-5 p-5 sm:p-7"><h2 className="section-title">ตั้งค่าบิล</h2><form onSubmit={(event) => { event.preventDefault(); if (titleDraft.trim()) void commit({ type: "set-title", title: titleDraft.trim() }); else setFormError("กรุณาใส่ชื่อบิล"); }} className="mt-4 flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><label htmlFor="session-title" className="mb-1 block text-sm font-bold">ชื่อบิล</label><input id="session-title" className="field" value={titleDraft} onChange={(event) => { setTitleDraft(event.target.value); setFormError(""); }} disabled={!canEdit}/></div><button type="submit" className="btn-secondary" disabled={!canEdit || titleDraft.trim() === session.title}>บันทึกชื่อ</button></form><div className="mt-4"><label htmlFor="currency" className="mb-1 block text-sm font-bold">สกุลเงิน</label><select id="currency" className="field max-w-48" value={session.currency} disabled={!canEdit || itemCount > 0} onChange={(event) => void commit({ type: "currency", currency: event.target.value as Currency })}><option value="THB">THB · บาท</option><option value="USD">USD · ดอลลาร์</option></select>{itemCount > 0 && <p className="muted mt-1 text-xs">ลบรายการทั้งหมดก่อนเปลี่ยนสกุลเงิน</p>}</div></section>
       <SettlementSettings session={session} disabled={!canEdit} onChange={(action) => { void commit(action); }}/>
@@ -427,12 +510,15 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
         />)}
       </section>
       <section id="summary" className="scroll-mt-5 space-y-5"><div><p className="eyebrow">Summary</p><h2 className="section-title mt-1">สรุปยอดและแชร์</h2></div>{result ? <SessionSummary result={result} session={session}/> : <div className="card p-5 sm:p-7"><p className="muted">{calculationError}</p></div>}
+        {owner && <OwnerReviewCard session={session} selectedParticipantId={reviewParticipantId} disabled={!canEdit} onSelectParticipant={setReviewParticipantId} onConfirm={(confirmed) => void confirmPerson(confirmed)}/>}
         <div className="card p-5 sm:p-7"><h3 className="section-title">แชร์ให้เพื่อนเลือกของที่ร่วมจ่าย</h3><p className="muted mt-2 text-sm">เพื่อนเปิดลิงก์แล้วเลือกชื่อของตัวเอง การเปลี่ยนแปลงจะปรากฏกับทุกคน</p><p role="status" aria-live="polite" className="mt-3 text-sm">{remoteStatus === "live" ? "เชื่อมต่อบิลออนไลน์แล้ว" : remoteStatus === "connecting" ? "กำลังเชื่อมต่อ…" : remoteStatus === "offline" ? "ออฟไลน์อยู่ แก้ไขได้เมื่อเชื่อมต่ออีกครั้ง" : remoteStatus === "stale" ? "ข้อมูลออนไลน์ไม่พร้อม กดโหลดใหม่" : "บิลฉบับร่างอยู่บนอุปกรณ์นี้"}</p>{owner?.billId && <button className="btn-secondary mt-2" onClick={() => reloadRemoteAndReconnect(owner.billId)} disabled={pending || remoteStatus === "offline"}>โหลดข้อมูลล่าสุดและเชื่อมต่อใหม่</button>}
           {!owner ? <><button className="btn-primary mt-4 w-full sm:w-auto" onClick={() => void createLink()} disabled={!shareAvailable || pending || !canCreateLink}>สร้างลิงก์ให้เพื่อน</button><p className="muted mt-2 text-xs">{pendingLegacyPromptPay ? "จัดการ PromptPay เดิมด้วยการกำหนดผู้รับหรือทิ้งเลขก่อนสร้างลิงก์" : shareAvailable ? "เพิ่มคน รายการ และเลือกคนจ่ายทุกใบเสร็จก่อนสร้างลิงก์" : "การแชร์ออนไลน์ยังไม่พร้อมใช้งาน สามารถทำบิลบนเครื่องนี้ต่อได้"}</p></> : <div className="mt-4 space-y-3">{friendUrl ? <div><label htmlFor="friend-link" className="mb-1 block text-sm font-bold">ลิงก์สำหรับเพื่อน</label><input id="friend-link" className="field text-sm" readOnly value={friendUrl} onFocus={(event) => event.currentTarget.select()}/><button className="btn-primary mt-2" onClick={() => void copyText(friendUrl, "คัดลอกลิงก์สำหรับเพื่อนแล้ว")}>คัดลอกลิงก์เพื่อน</button></div> : <p className="muted text-sm">ลิงก์เพื่อนถูกสร้างบนอุปกรณ์เดิม กรุณาใช้ลิงก์ที่บันทึกไว้</p>}{ownerUrl && <div><label htmlFor="owner-link" className="mb-1 block text-sm font-bold">ลิงก์สำรองสำหรับเจ้าของ</label><input id="owner-link" className="field text-sm" readOnly value={ownerUrl} onFocus={(event) => event.currentTarget.select()}/><button className="btn-secondary mt-2" onClick={() => void copyText(ownerUrl, "คัดลอกลิงก์เจ้าของแล้ว")}>คัดลอกลิงก์เจ้าของ</button></div>}{session.expiresAt && <p className="muted text-xs">ลิงก์หมดอายุ: {new Date(session.expiresAt).toLocaleString("th-TH")}</p>}</div>}
         </div>
         <div className="card p-5 sm:p-7"><h3 className="section-title">ช่องทางรับเงินและส่งสรุป</h3><p className="muted mt-2 text-sm">เลข PromptPay ระบุที่ชื่อคนด้านบน รูป QR ที่อัปโหลดจะอยู่บนอุปกรณ์นี้เท่านั้น เพื่อนที่เปิดลิงก์จะไม่เห็น QR จนกว่าคุณจะส่งรูปสรุป</p><div className="mt-5"><label htmlFor="qr-file" className="mb-1 block text-sm font-bold">อัปโหลดรูป QR รับเงิน</label><input id="qr-file" ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="field !h-auto text-sm" onChange={onQrChange}/><p className="muted mt-2 text-xs">PNG, JPEG หรือ WebP · สูงสุด 5 MB · รูปหายเมื่อรีเฟรช</p>{qrError && <p role="alert" className="error mt-2">{qrError}</p>}{qrUrl && qrReceivers.length > 1 && <div className="mt-4"><label htmlFor="qr-receiver" className="mb-1 block text-sm font-bold">QR นี้เป็นของใคร</label><select id="qr-receiver" className="field" value={effectiveQrReceiverId} onChange={(event) => setQrReceiverSelection(event.target.value ? { destinationKey, participantId: event.target.value } : null)}><option value="">เลือกคนที่รับเงินจาก QR นี้</option>{qrReceivers.map((person) => <option key={person.participantId} value={person.participantId}>{personLabels.get(person.participantId)}</option>)}</select><p className="muted mt-1 text-xs">เลือกผู้รับเงินจริงที่เป็นเจ้าของ QR ก่อนแชร์รูป เพื่อไม่ให้เพื่อนเข้าใจว่า QR ใช้แทน PromptPay ของทุกคน</p></div>}{qrUrl && qrReceivers.length === 1 && <p className="muted mt-3 text-sm">QR นี้จะระบุว่าเป็นของ {personLabels.get(qrReceivers[0].participantId)}</p>}{qrUrl && qrReceivers.length === 0 && <p className="muted mt-3 text-sm">ยังไม่มีเส้นทางโอนที่มีผู้รับเงิน จึงแชร์รูป QR ไม่ได้</p>}{qrUrl && <div className="mt-4 rounded-xl border border-[#e8e3f2] p-3"><Image unoptimized src={qrUrl} width={288} height={288} alt={`QR รับเงิน${qrReceiver ? `ของ ${personLabels.get(qrReceiver.participantId)}` : "ที่ยังไม่ได้ระบุผู้รับ"}`} className="mx-auto max-h-72 max-w-full object-contain"/><button className="btn-danger mt-3 w-full" onClick={clearQr}>ลบรูป QR</button></div>}</div><div className="mt-6 grid gap-3"><button className="btn-primary" onClick={() => void copyText(shareText, copySuccessMessage)} disabled={!shareReadiness.canCopy}>คัดลอกข้อความสรุป</button><p className="muted text-xs">{copyHelperText}</p><button className="btn-secondary" onClick={() => void shareImage()} disabled={!shareReadiness.canShareImage || imageStatus === "preparing" || sharingImage}>{sharingImage ? "กำลังแชร์รูป…" : imageStatus === "preparing" ? "กำลังเตรียมรูป…" : imageStatus === "error" ? "ลองเตรียมรูปอีกครั้ง" : imageIsCurrent && preparedImage.file ? "แชร์รูปสรุป" : "ดาวน์โหลดรูปสรุป"}</button><p className="muted text-xs">{qrUrl && qrReceivers.length > 1 && !qrReceiver ? "เลือกผู้รับ QR ก่อนแชร์รูป" : shareReadiness.canShareImage ? "รูป PNG มี QR ยอดรวม เส้นทางโอน ผู้จ่ายแต่ละใบ และระบุผู้รับ QR" : "อัปโหลด QR และกรอกบิลให้ครบก่อนแชร์รูป"}</p><p role="status" aria-live="polite" className={imageStatus === "error" ? "error text-xs" : "muted text-xs"}>{imageStatus === "preparing" ? "กำลังเตรียมรูปสรุป" : imageStatus === "ready" ? "รูปสรุปพร้อมแล้ว" : imageStatus === "error" ? preparedImage.error : ""}</p></div>{actionMessage && <p role="alert" className="error mt-3">{actionMessage}</p>}{manualCopyText && <div className="mt-3"><label htmlFor="manual-copy" className="mb-1 block text-sm font-bold">ข้อความสำหรับคัดลอกเอง</label><textarea id="manual-copy" ref={manualCopyRef} readOnly value={manualCopyText} rows={8} onFocus={(event) => event.currentTarget.select()} className="field !h-auto resize-y text-sm"/><button className="btn-secondary mt-2" onClick={() => manualCopyRef.current?.select()}>เลือกข้อความทั้งหมด</button></div>}</div>
         {session.currency === "THB" && missingDestinationLabels.length > 0 && <p role="status" className="error text-sm">ต้องเพิ่ม PromptPay ให้ผู้รับเงิน: {missingDestinationLabels.join(", ")}</p>}
       </section>
+      {owner?.billId && !session.closedAt && <section className="card p-5 sm:p-7"><h2 className="section-title">ปิดบิล</h2><p className="muted mt-2 text-sm">หลังปิดบิล ทุกคนยังเปิดดูและแชร์สรุปได้ แต่แก้ไขหรือยืนยันเพิ่มเติมไม่ได้</p><button ref={closeTriggerRef} type="button" className="btn-danger mt-4" disabled={!canEdit} onClick={() => { setAcknowledgeIncomplete(false); setCloseError(""); setCloseDialogOpen(true); }}>ปิดบิลนี้</button></section>}
+      {closeDialogOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !pending) setCloseDialogOpen(false); }}><div ref={closeDialogRef} role="dialog" aria-modal="true" aria-labelledby="close-bill-title" tabIndex={-1} className="card max-h-[90vh] w-full max-w-lg overflow-y-auto p-6"><h2 id="close-bill-title" className="section-title">ยืนยันการปิดบิล</h2><p className="mt-3">ปิดแล้วจะย้อนกลับหรือแก้ไขไม่ได้</p>{incompletePeople.length > 0 && <><p className="error mt-4">ยังไม่ยืนยันยอดล่าสุด: {incompletePeople.map((person) => personLabels.get(person.id)).join(", ")}</p><label className="mt-4 flex items-start gap-2"><input type="checkbox" checked={acknowledgeIncomplete} onChange={(event) => setAcknowledgeIncomplete(event.target.checked)}/><span>รับทราบว่ายังมีคนไม่ยืนยัน และต้องการปิดบิลต่อ</span></label></>}{closeError && <p role="alert" className="error mt-4">{closeError}</p>}<div className="mt-6 flex flex-wrap gap-2"><button type="button" className="btn-danger" disabled={pending || (incompletePeople.length > 0 && !acknowledgeIncomplete)} onClick={() => void closeBill()}>ยืนยันปิดบิลถาวร</button><button ref={closeCancelRef} type="button" className="btn-secondary" disabled={pending} onClick={() => { setCloseDialogOpen(false); setCloseError(""); }}>ยกเลิก</button></div></div></div>}
     </div>}
     <footer className="border-t border-[#e9e4f7] py-8 text-center text-sm text-[#817b8e]">SplitKub · หารบิลแล้วไปสนุกต่อ ✦</footer>
     <SuccessToast toast={toast} onDismiss={dismissToast}/>

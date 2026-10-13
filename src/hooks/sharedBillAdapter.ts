@@ -1,5 +1,5 @@
 import {
-  applyOwnerAction, selectParticipant, createSharedBill, fetchSharedBill, joinSharedBill,
+  applyOwnerAction, closeSharedBill, setParticipantConfirmation, selectParticipant, createSharedBill, fetchSharedBill, fetchSharedBillForParticipant, joinSharedBill,
   parseSharedBillFragment, setSharedParticipation, sharedBillAvailable, subscribeToSharedBill,
   type SharedBillCreateResponse, type SharedBillJoinResponse,
 } from "@/lib/supabase/sharedBill";
@@ -16,13 +16,21 @@ export function openSharedBill(publicId: string, token: string, mode?: "friend" 
   return joinSharedBill(publicId, token, mode);
 }
 export function createSharedSession(session: SplitSession): Promise<SharedCreated> { return createSharedBill(session); }
-export async function refreshSharedBill(billId: string): Promise<SplitSession> { return (await fetchSharedBill(billId)).snapshot; }
+export async function refreshSharedBill(billId: string, participantId?: string): Promise<SplitSession> {
+  return (await (participantId ? fetchSharedBillForParticipant(billId, participantId) : fetchSharedBill(billId))).snapshot;
+}
 export async function selectSharedParticipant(billId: string, participantId: string): Promise<SplitSession> { return (await selectParticipant(billId, participantId)).snapshot; }
 export function toggleSharedParticipation(billId: string, receiptId: string, itemId: string, participantId: string, selected: boolean, expectedRevision: number): Promise<SplitSession> {
   return setSharedParticipation(billId, receiptId, itemId, participantId, selected, expectedRevision);
 }
 export function saveSharedOwnerAction(billId: string, revision: number, action: SessionAction): Promise<SplitSession> {
   return applyOwnerAction(billId, revision, action);
+}
+export function confirmSharedParticipant(billId: string, participantId: string, confirmed: boolean, revision: number): Promise<SplitSession> {
+  return setParticipantConfirmation(billId, participantId, confirmed, revision);
+}
+export function closeSharedSession(billId: string, revision: number, acknowledgeIncomplete: boolean): Promise<SplitSession> {
+  return closeSharedBill(billId, revision, acknowledgeIncomplete);
 }
 export function subscribeSharedBill(billId: string, onChange: () => void, onError?: (error: unknown) => void, onStatus?: (status: string) => void): Promise<() => Promise<void>> {
   return subscribeToSharedBill(billId, onChange, onError, onStatus);

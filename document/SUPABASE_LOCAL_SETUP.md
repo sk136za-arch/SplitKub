@@ -257,7 +257,7 @@ npx supabase db reset
 2. เปิด Anonymous Sign-ins
 3. เพิ่ม `api` ใน Exposed schemas
 4. ตั้ง Realtime ให้ไม่อนุญาต public channels
-5. เชื่อม CLI และส่ง migration ทั้ง 6 ไฟล์ตามลำดับ (001 shared bills → 002 settlement routing → 003 capabilities → 004 unlocked participant selection → 005 tab-bound participation → 006 receipt adjustments) ก่อนเปิดใช้ client รุ่นล่าสุด
+5. เชื่อม CLI และส่ง migration ทั้ง 7 ไฟล์ตามลำดับ (001 shared bills → 002 settlement routing → 003 capabilities → 004 unlocked participant selection → 005 tab-bound participation → 006 receipt adjustments → 007 close bill/reviews) ก่อนเปิดใช้ client รุ่นล่าสุด
 
 ```powershell
 npx supabase login

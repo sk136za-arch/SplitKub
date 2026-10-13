@@ -36,6 +36,7 @@ export function billReducer(bill: Bill, action: BillAction): Bill {
 
 export const emptySession = (): SplitSession => ({
   id: "", title: "บิลของเรา", currency: "THB", revision: 0, expiresAt: "",
+  closedAt: "", confirmationRevision: 0, confirmations: [],
   settlementMode: "direct", collectorParticipantId: "", participants: [], receipts: [],
 });
 
@@ -85,6 +86,7 @@ export function sessionReducer(session: SplitSession, action: SessionAction): Sp
     case "set-person-promptpay": return { ...session, participants: session.participants.map((person) => person.id === action.id ? { ...person, promptPay: action.value } : person) };
     case "remove-person": return {
       ...session,
+      confirmations: session.confirmations.filter((status) => status.participantId !== action.id),
       settlementMode: session.collectorParticipantId === action.id ? "direct" : session.settlementMode,
       collectorParticipantId: session.collectorParticipantId === action.id ? "" : session.collectorParticipantId,
       participants: session.participants.filter((person) => person.id !== action.id),

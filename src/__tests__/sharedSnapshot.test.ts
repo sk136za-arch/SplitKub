@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { emptySession } from "../lib/billState";
-import { normalizeRemoteSessionSnapshot, shouldApplyRemoteRevision } from "../lib/sharedSnapshot";
+import { matchesRequestedParticipant, normalizeRemoteSessionSnapshot, shouldApplyRemoteRevision, shouldApplyRemoteSnapshot } from "../lib/sharedSnapshot";
 import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 describe("remote session revision ordering", () => {
+  it("rejects a participant-scoped response after the tab identity changes", () => {
+    expect(matchesRequestedParticipant("a", "a")).toBe(true);
+    expect(matchesRequestedParticipant("a", "b")).toBe(false);
+  });
   it("accepts equal or newer snapshots and rejects late older responses", () => {
     expect(shouldApplyRemoteRevision(4, 4)).toBe(true);
     expect(shouldApplyRemoteRevision(4, 5)).toBe(true);
@@ -11,6 +15,29 @@ describe("remote session revision ordering", () => {
   });
   it("rejects unsafe revision values", () => {
     expect(shouldApplyRemoteRevision(0, Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+  });
+  it("orders content and confirmation revisions without rolling back content", () => {
+    expect(shouldApplyRemoteSnapshot({ revision: 3, confirmationRevision: 5 }, { revision: 4, confirmationRevision: 0 })).toBe(true);
+    expect(shouldApplyRemoteSnapshot({ revision: 3, confirmationRevision: 5 }, { revision: 3, confirmationRevision: 6 })).toBe(true);
+    expect(shouldApplyRemoteSnapshot({ revision: 3, confirmationRevision: 5 }, { revision: 3, confirmationRevision: 4 })).toBe(false);
+    expect(shouldApplyRemoteSnapshot({ revision: 3, confirmationRevision: 5 }, { revision: 2, confirmationRevision: 99 })).toBe(false);
+  });
+});
+
+describe("remote review compatibility", () => {
+  it("defaults only a wholly absent review group", () => {
+    const old: Record<string, unknown> = { ...emptySession() };
+    delete old.closedAt; delete old.confirmationRevision; delete old.confirmations;
+    expect(normalizeRemoteSessionSnapshot(old)).toEqual({ ...old, closedAt: "", confirmationRevision: 0, confirmations: [] });
+    expect(old).not.toHaveProperty("closedAt");
+  });
+  it("rejects partial or malformed review groups", () => {
+    const session = emptySession();
+    const partial: Record<string, unknown> = { ...session };
+    delete partial.confirmations;
+    expect(normalizeRemoteSessionSnapshot(partial)).toBeNull();
+    expect(normalizeRemoteSessionSnapshot({ ...session, confirmationRevision: -1 })).toBeNull();
+    expect(normalizeRemoteSessionSnapshot({ ...session, confirmations: [{ participantId: "missing", viewedAt: "", confirmedAt: "", confirmedContentRevision: null }] })).toBeNull();
   });
 });
 

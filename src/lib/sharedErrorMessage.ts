@@ -5,6 +5,8 @@ export function sharedErrorMessage(error: unknown): string {
   if (value.code === "unavailable") return "ไม่พบบิลนี้ หรือบิลหมดอายุแล้ว";
   if (value.code === "auth_required") return "ลิงก์นี้ไม่มีสิทธิ์แก้ไขบิล";
   if (value.code === "revision_conflict") return "ข้อมูลเปลี่ยนระหว่างแก้ไข กำลังโหลดข้อมูลล่าสุด";
+  if (value.code === "bill_closed") return "บิลนี้ปิดแล้ว แก้ไขหรือยืนยันเพิ่มเติมไม่ได้";
+  if (value.code === "confirmations_incomplete") return "ยังมีคนที่ไม่ได้ยืนยันยอดล่าสุด กรุณารับทราบในหน้าต่างปิดบิล";
   if (value.code === "disabled" || value.code === "not_configured") return "การแชร์ออนไลน์ยังไม่พร้อมใช้งาน";
   if (value.code === "migration_required") return "ฐานข้อมูลบิลออนไลน์ยังไม่รองรับฟีเจอร์ล่าสุด กรุณาอัปเดต migration ก่อนลองอีกครั้ง";
   if (value.code === "realtime_unavailable") return "การเชื่อมต่อสดขัดข้อง กรุณาโหลดข้อมูลล่าสุดและเชื่อมต่อใหม่";

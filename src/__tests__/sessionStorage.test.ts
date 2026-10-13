@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculateBill } from "../lib/calculateBill";
 import { emptyBill, emptySession } from "../lib/billState";
-import { clearSessionStorage, confirmRemoteSession, dismissSessionMigrationNotice, legacyPromptPayMigrationNotice, loadSession, pendingLegacyPromptPay, saveAssignedLegacyPromptPay, saveBill, saveConfirmedRemoteSession, saveSession, sessionMigrationNotice, SESSION_MIGRATION_NOTICE_KEY, SESSION_PENDING_PROMPTPAY_KEY, SESSION_PROMPTPAY_MIGRATION_RESOLVED_KEY, SESSION_STORAGE_KEY, STORAGE_KEY, V2_SESSION_STORAGE_KEY, V3_SESSION_STORAGE_KEY } from "../lib/storage";
+import { clearSessionStorage, confirmRemoteSession, dismissSessionMigrationNotice, legacyPromptPayMigrationNotice, loadSession, pendingLegacyPromptPay, saveAssignedLegacyPromptPay, saveBill, saveConfirmedRemoteSession, saveSession, sessionMigrationNotice, SESSION_MIGRATION_NOTICE_KEY, SESSION_PENDING_PROMPTPAY_KEY, SESSION_PROMPTPAY_MIGRATION_RESOLVED_KEY, SESSION_STORAGE_KEY, STORAGE_KEY, V2_SESSION_STORAGE_KEY, V3_SESSION_STORAGE_KEY, V4_SESSION_STORAGE_KEY } from "../lib/storage";
 import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 function memoryStorage() {
@@ -14,8 +14,8 @@ function memoryStorage() {
   };
 }
 
-describe("V4 session storage", () => {
-  it("copies V2 to V4 with direct routing, retaining V2 until remote confirmation", () => {
+describe("V5 session storage", () => {
+  it("copies V2 to V5 with direct routing, retaining V2 until remote confirmation", () => {
     const storage = memoryStorage();
     const v2 = { ...emptySession(), participants: [{ id: "p", name: "Pat", promptPay: "0891234567" }] };
     const oldSession: Record<string, unknown> = { ...v2 };
@@ -26,7 +26,7 @@ describe("V4 session storage", () => {
     const migrated = loadSession(storage)!;
     expect(migrated).toMatchObject({ settlementMode: "direct", collectorParticipantId: "", participants: v2.participants });
     expect(storage.data.get(V2_SESSION_STORAGE_KEY)).toBe(original);
-    expect(JSON.parse(storage.data.get(SESSION_STORAGE_KEY)!).version).toBe(4);
+    expect(JSON.parse(storage.data.get(SESSION_STORAGE_KEY)!).version).toBe(5);
     const confirmed = { ...migrated, id: "remote", revision: 1, expiresAt: "2026-10-05T00:00:00Z" };
     saveConfirmedRemoteSession(storage, confirmed);
     expect(storage.data.has(V2_SESSION_STORAGE_KEY)).toBe(false);
@@ -40,9 +40,21 @@ describe("V4 session storage", () => {
     const loaded = loadSession(storage)!;
     expect(loaded.receipts[0].adjustments).toEqual(defaultReceiptAdjustments());
     expect(storage.data.get(V3_SESSION_STORAGE_KEY)).toBe(original);
-    expect(JSON.parse(storage.data.get(SESSION_STORAGE_KEY)!).version).toBe(4);
+    expect(JSON.parse(storage.data.get(SESSION_STORAGE_KEY)!).version).toBe(5);
     saveConfirmedRemoteSession(storage, { ...loaded, id: "remote", revision: 1, expiresAt: "2026-10-12T00:00:00Z" });
     expect(storage.data.has(V3_SESSION_STORAGE_KEY)).toBe(false);
+  });
+  it("copies V4 review defaults without deleting the original until remote confirmation", () => {
+    const storage = memoryStorage();
+    const old: Record<string, unknown> = { ...emptySession() };
+    delete old.closedAt; delete old.confirmationRevision; delete old.confirmations;
+    const original = JSON.stringify({ version: 4, started: true, session: old });
+    storage.data.set(V4_SESSION_STORAGE_KEY, original);
+    const migrated = loadSession(storage)!;
+    expect(migrated).toMatchObject({ closedAt: "", confirmationRevision: 0, confirmations: [] });
+    expect(storage.data.get(V4_SESSION_STORAGE_KEY)).toBe(original);
+    saveConfirmedRemoteSession(storage, { ...migrated, id: "remote", revision: 1, expiresAt: "2030-01-01T00:00:00Z" });
+    expect(storage.data.has(V4_SESSION_STORAGE_KEY)).toBe(false);
   });
 
   it("keeps a usable V2 draft and old key if copying to V3 fails", () => {

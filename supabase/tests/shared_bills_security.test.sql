@@ -1,11 +1,11 @@
 begin;
-select plan(12);
+select plan(15);
 
 select ok(
-  (select count(*) = 6 from pg_catalog.pg_class c
+  (select count(*) = 7 from pg_catalog.pg_class c
    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'private' and c.relkind = 'r' and c.relrowsecurity),
-  'all six private shared-bill tables enforce RLS'
+  'all seven private shared-bill tables enforce RLS'
 );
 
 select ok(not has_table_privilege('anon', 'private.shared_bills', 'select'), 'anon cannot read shared bills directly');
@@ -22,16 +22,34 @@ select ok(
 );
 
 select ok(
-  (select count(*) = 8 and bool_and(p.prosecdef) and bool_and(p.proconfig @> array['search_path=""'])
+  (select count(*) = 10 and bool_and(p.prosecdef) and bool_and(p.proconfig @> array['search_path=""'])
    from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'api'),
-  'all eight exposed API functions are SECURITY DEFINER with an empty fixed search_path'
+   where n.nspname = 'api' and p.proname <> 'shared_bill_capabilities'
+     and has_function_privilege('authenticated', p.oid, 'execute')),
+  'all ten granted business RPCs are SECURITY DEFINER with an empty fixed search_path'
 );
+
+select ok(
+  (select count(*) = 4 and bool_and(p.prosecdef) and bool_and(p.proconfig @> array['search_path=""'])
+     and bool_and(not has_function_privilege('authenticated', p.oid, 'execute'))
+   from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'api' and p.proname in ('apply_owner_action_before_close',
+     'claim_participant_before_close', 'set_shared_participation_before_close',
+     'set_shared_participation_for_participant_before_close')),
+  'four renamed inner implementations remain SECURITY DEFINER but revoked from callers'
+);
+
+select ok(not has_function_privilege('authenticated', 'private.friend_session_snapshot_for_participant(uuid,text)', 'execute')
+  and not has_function_privilege('anon', 'private.friend_session_snapshot_for_participant(uuid,text)', 'execute'),
+  'participant-scoped snapshot helper is not directly callable');
 
 select ok(to_regprocedure('api.set_shared_participation(uuid,text,text,boolean,bigint)') is not null,
   'participation RPC takes receipt and item identifiers separately');
 select ok(to_regprocedure('api.apply_owner_action(uuid,bigint,jsonb)') is not null,
   'owner action accepts a revision-checked complete session');
+select ok(has_function_privilege('authenticated', 'api.fetch_shared_bill_for_participant(uuid,text)', 'execute')
+  and not has_function_privilege('anon', 'api.fetch_shared_bill_for_participant(uuid,text)', 'execute'),
+  'friend status refresh is authenticated-only and participant-scoped');
 
 select ok(
   exists (select 1 from pg_catalog.pg_policies where schemaname = 'realtime' and tablename = 'messages'

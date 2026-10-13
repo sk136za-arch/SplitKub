@@ -24,7 +24,7 @@ export interface SharedBillJoinResponse extends SharedBillSnapshot {
 export type SharedBillErrorCode =
   | "disabled" | "not_configured" | "auth_required" | "invalid_token" | "unavailable"
   | "revision_conflict" | "participant_not_claimed" | "owner_cannot_claim"
-  | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "rate_limited" | "network" | "unknown";
+  | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "bill_closed" | "confirmations_incomplete" | "rate_limited" | "network" | "unknown";
 
 export class SharedBillError extends Error {
   constructor(readonly code: SharedBillErrorCode, message: string) {
@@ -49,6 +49,8 @@ export function mapSharedBillError(error: unknown): SharedBillError {
     return new SharedBillError("migration_required", "Apply the latest shared-bill database migration before using collector mode.");
   }
   if (matched("REVISION_CONFLICT") || code === "40001") return new SharedBillError("revision_conflict", "This bill changed elsewhere. Refresh it and try again.");
+  if (matched("BILL_CLOSED")) return new SharedBillError("bill_closed", "This bill is closed and read-only.");
+  if (matched("CONFIRMATIONS_INCOMPLETE")) return new SharedBillError("confirmations_incomplete", "Some participants have not confirmed the latest bill.");
   if (matched("INVALID_TOKEN")) return new SharedBillError("invalid_token", "This share link is invalid.");
   if (matched("SHARED_BILL_UNAVAILABLE") || matched("PARTICIPANT_NOT_FOUND")) return new SharedBillError("unavailable", "This shared bill is unavailable or has expired.");
   if (matched("PARTICIPANT_ALREADY_CLAIMED")) return new SharedBillError("migration_required", "Apply the latest shared-bill migration to allow multiple friends to select the same name.");
@@ -94,6 +96,16 @@ export async function fetchSharedBill(billId: string): Promise<SharedBillSnapsho
   return assertSnapshotEnvelope(await callRpc(client, "fetch_shared_bill", { p_bill_id: billId }));
 }
 
+/** Friend refresh is scoped to the participant selected in this browser tab. */
+export async function fetchSharedBillForParticipant(billId: string, participantId: string): Promise<SharedBillSnapshot> {
+  const client = getClient();
+  await ensureAnonymousSession(client);
+  const result = assertSnapshotEnvelope(await callRpc(client, "fetch_shared_bill_for_participant", {
+    p_bill_id: billId, p_participant_id: participantId,
+  }));
+  return result;
+}
+
 export async function selectParticipant(
   billId: string,
   participantId: string,
@@ -136,6 +148,7 @@ export async function applyOwnerAction(
   const client = getClient();
   await ensureAnonymousSession(client);
   const current = await fetchSharedBill(billId);
+  if (current.snapshot.closedAt) throw new SharedBillError("bill_closed", "This bill is closed and read-only.");
   if (current.snapshot.revision !== expectedRevision) {
     throw new SharedBillError("revision_conflict", "This bill changed elsewhere. Refresh it and try again.");
   }
@@ -153,6 +166,26 @@ export async function applyOwnerAction(
   if (session.settlementMode === "collector") assertCollectorPreserved(session, saved);
   if (needsAdjustmentCapability) assertAdjustmentsPreserved(session, saved);
   return saved;
+}
+
+export async function setParticipantConfirmation(billId: string, participantId: string, confirmed: boolean, expectedContentRevision: number): Promise<SplitSession> {
+  const client = getClient();
+  await ensureAnonymousSession(client);
+  await ensureCloseBillSupported(client);
+  return assertRemoteSession(await callRpc(client, "set_participant_confirmation", {
+    p_bill_id: billId, p_participant_id: participantId, p_confirmed: confirmed,
+    p_expected_content_revision: expectedContentRevision,
+  }));
+}
+
+export async function closeSharedBill(billId: string, expectedContentRevision: number, acknowledgeIncomplete: boolean): Promise<SplitSession> {
+  const client = getClient();
+  await ensureAnonymousSession(client);
+  await ensureCloseBillSupported(client);
+  return assertRemoteSession(await callRpc(client, "close_shared_bill", {
+    p_bill_id: billId, p_expected_content_revision: expectedContentRevision,
+    p_ack_incomplete: acknowledgeIncomplete,
+  }));
 }
 
 export function buildSharedBillUrl(
@@ -179,7 +212,7 @@ export function parseSharedBillFragment(hash: string): { role: "friend" | "owner
 
 export async function subscribeToSharedBill(
   billId: string,
-  onChange: (revision: number) => void,
+  onChange: (revision: number, confirmationRevision: number) => void,
   onError?: (error: SharedBillError) => void,
   onStatus?: (status: string) => void,
 ): Promise<() => Promise<void>> {
@@ -188,8 +221,11 @@ export async function subscribeToSharedBill(
   let active = true;
   const channel: RealtimeChannel = client
     .channel(`shared-bill:${billId}`, { config: { private: true } })
-    .on("broadcast", { event: "shared_bill_changed" }, ({ payload }: { payload: { revision?: unknown } }) => {
-      if (active && typeof payload?.revision === "number" && Number.isSafeInteger(payload.revision)) onChange(payload.revision);
+    .on("broadcast", { event: "shared_bill_changed" }, ({ payload }: { payload: { revision?: unknown; confirmationRevision?: unknown } }) => {
+      if (active && typeof payload?.revision === "number" && Number.isSafeInteger(payload.revision) &&
+          (payload.confirmationRevision === undefined || Number.isSafeInteger(payload.confirmationRevision))) {
+        onChange(payload.revision, typeof payload.confirmationRevision === "number" ? payload.confirmationRevision : 0);
+      }
     });
   let cleanupPromise: Promise<void> | null = null;
   const cleanupOnce = (): Promise<void> => {
@@ -291,6 +327,14 @@ async function ensureReceiptAdjustmentsSupported(client: ReturnType<typeof getSh
   if (!isRecord(capabilities) || !Number.isSafeInteger(capabilities.receiptAdjustmentsVersion)
     || (capabilities.receiptAdjustmentsVersion as number) < 1) {
     throw new SharedBillError("migration_required", "Apply the receipt adjustments migration before sharing adjusted receipts.");
+  }
+}
+
+async function ensureCloseBillSupported(client: ReturnType<typeof getSharedBillClient>): Promise<void> {
+  const capabilities = await callRpc(client, "shared_bill_capabilities", {});
+  if (!isRecord(capabilities) || !Number.isSafeInteger(capabilities.closeBillVersion) ||
+      (capabilities.closeBillVersion as number) < 1) {
+    throw new SharedBillError("migration_required", "Apply the close-bill migration before sharing or reviewing bills.");
   }
 }
 

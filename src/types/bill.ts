@@ -31,6 +31,12 @@ export interface Receipt {
   adjustments: ReceiptAdjustments;
   items: BillItem[];
 }
+export interface ParticipantConfirmation {
+  participantId: string;
+  viewedAt: string;
+  confirmedAt: string;
+  confirmedContentRevision: number | null;
+}
 export interface SplitSession {
   id: string;
   title: string;
@@ -39,6 +45,10 @@ export interface SplitSession {
   revision: number;
   /** ISO expiry from the remote service; empty on a local-only draft. */
   expiresAt: string;
+  closedAt: string;
+  confirmationRevision: number;
+  /** Owner sees every status; a friend receives only their selected identity. */
+  confirmations: ParticipantConfirmation[];
   settlementMode: SettlementMode;
   /** Empty unless a valid participant is selected in collector mode. */
   collectorParticipantId: string;

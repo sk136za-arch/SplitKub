@@ -6,8 +6,9 @@ export const STORAGE_KEY = "splitkub:bill:v1";
 const VERSION = 1;
 export const V2_SESSION_STORAGE_KEY = "splitkub:session:v2";
 export const V3_SESSION_STORAGE_KEY = "splitkub:session:v3";
-export const SESSION_STORAGE_KEY = "splitkub:session:v4";
-const SESSION_VERSION = 4;
+export const V4_SESSION_STORAGE_KEY = "splitkub:session:v4";
+export const SESSION_STORAGE_KEY = "splitkub:session:v5";
+const SESSION_VERSION = 5;
 export const SESSION_MIGRATION_NOTICE_KEY = "splitkub:session:migration-notice:v1";
 export const SESSION_PENDING_PROMPTPAY_KEY = "splitkub:session:pending-promptpay:v1";
 export const SESSION_PROMPTPAY_MIGRATION_RESOLVED_KEY = "splitkub:session:promptpay-migration-resolved:v1";
@@ -82,7 +83,7 @@ export function saveSession(storage: Pick<Storage, "setItem">, session: SplitSes
   storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ version: SESSION_VERSION, started, session }));
 }
 
-/** Reads V4 first. Valid V3/V2/V1 drafts are copied into V4; original keys remain intact. */
+/** Reads V5 first. Valid V4/V3/V2/V1 drafts are copied into V5; original keys remain intact. */
 export function loadSession(storage: Pick<Storage, "getItem" | "setItem">): SplitSession | null {
   const pendingLegacyPromptPay = preserveLegacyPromptPay(storage);
   try {
@@ -95,6 +96,17 @@ export function loadSession(storage: Pick<Storage, "getItem" | "setItem">): Spli
       }
     }
   } catch { /* Fall back to older recoverable copies. */ }
+  try {
+    const rawV4 = storage.getItem(V4_SESSION_STORAGE_KEY);
+    if (rawV4) {
+      const envelope = JSON.parse(rawV4) as { version?: unknown; started?: unknown; session?: unknown };
+      const migratedV4 = migrateV4Session(envelope.version === 4 ? envelope.session : null);
+      if (migratedV4 && shouldPersistSession(envelope.started === true, migratedV4)) {
+        try { saveSession(storage, migratedV4, envelope.started === true); } catch { /* Preserve V4 if copying fails. */ }
+        return migratedV4;
+      }
+    }
+  } catch { /* Fall back to V3. */ }
   try {
     const rawV3 = storage.getItem(V3_SESSION_STORAGE_KEY);
     if (rawV3) {
@@ -135,6 +147,7 @@ export function loadSessionSafely(getStorage: () => Pick<Storage, "getItem" | "s
 export function migrateLegacyBill(bill: Bill): SplitSession {
   return {
     id: "", title: "บิลของเรา", currency: bill.currency, revision: 0, expiresAt: "",
+    closedAt: "", confirmationRevision: 0, confirmations: [],
     settlementMode: "direct", collectorParticipantId: "",
     participants: bill.participants.map((person) => ({ ...person, promptPay: "" })),
     receipts: [{ id: "legacy-receipt-1", title: "ใบเสร็จที่ 1", paidByParticipantId: "", adjustments: defaultReceiptAdjustments(), items: bill.items.map((item) => ({ ...item, participantIds: [...item.participantIds] })) }],
@@ -150,6 +163,16 @@ export function migrateV2Session(value: unknown): SplitSession | null {
 
 export function migrateV3Session(value: unknown): SplitSession | null {
   const migrated = addMissingReceiptAdjustments(value);
+  return migrateV4Session(migrated);
+}
+
+export function migrateV4Session(value: unknown): SplitSession | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const keys = ["closedAt", "confirmationRevision", "confirmations"];
+  const migrated = keys.every((key) => !(key in candidate))
+    ? { ...candidate, closedAt: "", confirmationRevision: 0, confirmations: [] }
+    : candidate;
   return isSession(migrated) ? migrated : null;
 }
 
@@ -230,11 +253,12 @@ export function confirmRemoteSession(storage: Pick<Storage, "getItem" | "setItem
     throw new Error("ยังบันทึก PromptPay เดิมไม่สำเร็จ จึงเก็บบิลเก่าไว้ก่อน");
   }
   storage.removeItem(STORAGE_KEY);
+  storage.removeItem(V4_SESSION_STORAGE_KEY);
   storage.removeItem(V3_SESSION_STORAGE_KEY);
   storage.removeItem(V2_SESSION_STORAGE_KEY);
 }
 
-/** Persist the exact server-confirmed V4 draft before retiring its V1/V2/V3 copies. */
+/** Persist the exact server-confirmed V5 draft before retiring its V1/V2/V3/V4 copies. */
 export function saveConfirmedRemoteSession(
   storage: Pick<Storage, "getItem" | "setItem" | "removeItem">,
   confirmedSession: SplitSession,
@@ -246,6 +270,7 @@ export function saveConfirmedRemoteSession(
 /** Explicit user clear removes all copies so an older bill cannot reappear. */
 export function clearSessionStorage(storage: Pick<Storage, "removeItem">): void {
   storage.removeItem(SESSION_STORAGE_KEY);
+  storage.removeItem(V4_SESSION_STORAGE_KEY);
   storage.removeItem(V3_SESSION_STORAGE_KEY);
   storage.removeItem(V2_SESSION_STORAGE_KEY);
   storage.removeItem(STORAGE_KEY);
@@ -263,6 +288,9 @@ function isSession(value: unknown): value is SplitSession {
     typeof session.collectorParticipantId !== "string" ||
     !Number.isSafeInteger(session.revision) || (session.revision as number) < 0 ||
     typeof session.expiresAt !== "string" ||
+    typeof session.closedAt !== "string" ||
+    !Number.isSafeInteger(session.confirmationRevision) || (session.confirmationRevision as number) < 0 ||
+    !Array.isArray(session.confirmations) ||
     !Array.isArray(session.participants) || !Array.isArray(session.receipts)) return false;
 
   const participantIds = new Set<string>();
@@ -275,6 +303,15 @@ function isSession(value: unknown): value is SplitSession {
   }
   if ((session.settlementMode === "direct" && session.collectorParticipantId !== "") ||
       (session.settlementMode === "collector" && !participantIds.has(session.collectorParticipantId))) return false;
+  const confirmationIds = new Set<string>();
+  for (const value of session.confirmations as unknown[]) {
+    if (!value || typeof value !== "object") return false;
+    const status = value as Record<string, unknown>;
+    if (typeof status.participantId !== "string" || !participantIds.has(status.participantId) || confirmationIds.has(status.participantId) ||
+      typeof status.viewedAt !== "string" || typeof status.confirmedAt !== "string" ||
+      (status.confirmedContentRevision !== null && (!Number.isSafeInteger(status.confirmedContentRevision) || (status.confirmedContentRevision as number) < 0))) return false;
+    confirmationIds.add(status.participantId);
+  }
   const receiptIds = new Set<string>();
   for (const value of session.receipts as unknown[]) {
     if (!value || typeof value !== "object") return false;

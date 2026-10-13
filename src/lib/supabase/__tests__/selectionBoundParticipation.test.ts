@@ -11,7 +11,7 @@ vi.mock("../client", () => ({
 }));
 
 import { emptySession } from "../../billState";
-import { setSharedParticipation } from "../sharedBill";
+import { fetchSharedBillForParticipant, setSharedParticipation } from "../sharedBill";
 
 describe("tab-bound friend participation", () => {
   beforeEach(() => {
@@ -27,6 +27,19 @@ describe("tab-bound friend participation", () => {
       p_participant_id: "person-a",
       p_selected: false,
       p_expected_revision: 12,
+    });
+  });
+
+  it("scopes friend refresh status to the participant selected in this tab", async () => {
+    const snapshot = { ...emptySession(), id: "bill", revision: 3, expiresAt: "2027-01-01T00:00:00Z",
+      participants: [{ id: "person-b", name: "B", promptPay: "" }],
+      confirmations: [{ participantId: "person-b", viewedAt: "", confirmedAt: "", confirmedContentRevision: null }] };
+    rpc.mockResolvedValue({ data: { publicId: "public", billId: "bill", snapshot }, error: null });
+    await expect(fetchSharedBillForParticipant("bill", "person-b")).resolves.toMatchObject({
+      snapshot: { confirmations: [{ participantId: "person-b" }] },
+    });
+    expect(rpc).toHaveBeenCalledWith("fetch_shared_bill_for_participant", {
+      p_bill_id: "bill", p_participant_id: "person-b",
     });
   });
 });

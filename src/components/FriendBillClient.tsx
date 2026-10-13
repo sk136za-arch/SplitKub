@@ -7,10 +7,10 @@ import { calculateBill } from "@/lib/calculateBill";
 import { formatMoney } from "@/lib/money";
 import { readFriendSelection, reconcileFriendSelection, rememberFriendSelection } from "@/lib/friendSelection";
 import { participantLabels } from "@/lib/participantLabels";
-import { shouldApplyRemoteRevision } from "@/lib/sharedSnapshot";
+import { matchesRequestedParticipant, shouldApplyRemoteSnapshot } from "@/lib/sharedSnapshot";
 import { refreshWithTrailingDirty, SharedSubscriptionController, shouldMarkSubscriptionLive } from "@/lib/sharedSubscription";
 import type { SplitSession } from "@/types/bill";
-import { selectSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
+import { confirmSharedParticipant, selectSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import { SessionSummary } from "./SessionSummary";
 import { OwnerApp } from "./OwnerApp";
 
@@ -35,34 +35,51 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   const [hashRevision, setHashRevision] = useState(0);
   const openGeneration = useRef(0);
   const revisionSeen = useRef(-1);
+  const confirmationRevisionSeen = useRef(-1);
   const reloadSequence = useRef(0);
-  const reloadInFlight = useRef<{ id: string; generation: number; dirty: boolean; promise: Promise<boolean> } | null>(null);
+  const selectedPersonIdRef = useRef("");
+  const reloadInFlight = useRef<{ id: string; generation: number; participantId: string; dirty: boolean; promise: Promise<boolean> } | null>(null);
   const subscribedGeneration = useRef(-1);
   const subscriptionGeneration = useRef(0);
   const [subscriptionController] = useState(() => new SharedSubscriptionController(subscribeSharedBill));
 
+  useEffect(() => { selectedPersonIdRef.current = selectedPersonId; }, [selectedPersonId]);
+
   // The callback intentionally coordinates mutable generation/request refs across async refreshes.
-  const reload = useCallback((id: string, generation = openGeneration.current): Promise<boolean> => {
+  const reload = useCallback((id: string, generation = openGeneration.current, participantId = selectedPersonIdRef.current): Promise<boolean> => {
     if (generation !== openGeneration.current) return Promise.resolve(false);
     if (reloadInFlight.current?.id === id && reloadInFlight.current.generation === generation) {
       reloadInFlight.current.dirty = true;
+      reloadInFlight.current.participantId = participantId;
       return reloadInFlight.current.promise;
     }
     const sequence = ++reloadSequence.current;
-    const request = { id, generation, dirty: false, promise: Promise.resolve(false) };
+    const request = { id, generation, participantId, dirty: false, promise: Promise.resolve(false) };
     const promise = (async () => {
       const refreshOnce = async () => {
+        const requestedParticipantId = request.participantId;
         try {
-          const next = await refreshSharedBill(id);
+          const next = await refreshSharedBill(id, requestedParticipantId || undefined);
           if (sequence !== reloadSequence.current || generation !== openGeneration.current) return false;
-          if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+          if (!matchesRequestedParticipant(requestedParticipantId, selectedPersonIdRef.current)) {
+            request.participantId = selectedPersonIdRef.current;
+            request.dirty = true;
+            return false;
+          }
+          if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
             revisionSeen.current = next.revision;
+            confirmationRevisionSeen.current = next.confirmationRevision;
             setSnapshot(next);
           }
           setError("");
           return true;
         } catch (caught) {
           if (sequence === reloadSequence.current && generation === openGeneration.current) {
+            if (!matchesRequestedParticipant(requestedParticipantId, selectedPersonIdRef.current)) {
+              request.participantId = selectedPersonIdRef.current;
+              request.dirty = true;
+              return false;
+            }
             setSyncStatus(navigator.onLine ? "stale" : "offline");
             setError(sharedErrorMessage(caught));
           }
@@ -124,8 +141,9 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     const generation = ++openGeneration.current;
     const isCurrent = () => !cancelled && generation === openGeneration.current;
     /* eslint-disable react-hooks/set-state-in-effect -- Route and fragment changes require a fresh client-only load. */
-    setViewStatus("loading"); setError(""); setSnapshot(null); setBillId(""); setSelectedPersonId(""); setOwnerRecovery(null); setJoinedOwner(null); setPending(false);
+    setViewStatus("loading"); setError(""); setSnapshot(null); setBillId(""); selectedPersonIdRef.current = ""; setSelectedPersonId(""); setOwnerRecovery(null); setJoinedOwner(null); setPending(false);
     revisionSeen.current = -1;
+    confirmationRevisionSeen.current = -1;
     /* eslint-enable react-hooks/set-state-in-effect */
     const capability = parseShareFragment(window.location.hash);
     if (!capability) { setViewStatus("error"); setError("ลิงก์นี้ไม่มีรหัสเข้าถึง กรุณาขอลิงก์ใหม่จากเจ้าของบิล"); return; }
@@ -135,23 +153,39 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     void openSharedBill(publicId, capability.token).then((opened) => {
       if (!isCurrent()) return;
       if (opened.role === "owner") { setJoinedOwner(opened); return; }
-      if (!shouldApplyRemoteRevision(revisionSeen.current, opened.snapshot.revision)) return;
+      if (!shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, opened.snapshot)) return;
       setBillId(opened.billId);
       revisionSeen.current = opened.snapshot.revision;
+      confirmationRevisionSeen.current = opened.snapshot.confirmationRevision;
       setSnapshot(opened.snapshot);
       setViewStatus("ready");
       setSyncStatus(navigator.onLine ? "connecting" : "offline");
       const remembered = readFriendSelection(selectionStorage(), publicId, opened.snapshot.participants);
-      if (remembered) {
+      if (remembered && opened.snapshot.closedAt) {
+        selectedPersonIdRef.current = remembered;
+        setSelectedPersonId(remembered);
+        setPending(true);
+        void refreshSharedBill(opened.billId, remembered).then((next) => {
+          if (!isCurrent()) return;
+          if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
+            revisionSeen.current = next.revision;
+            confirmationRevisionSeen.current = next.confirmationRevision;
+            setSnapshot(next);
+          }
+        }, (caught) => { if (isCurrent()) setError(sharedErrorMessage(caught)); })
+          .finally(() => { if (isCurrent()) setPending(false); });
+      } else if (remembered) {
         setPending(true);
         // A remembered name is a local preference, not server authorization.
         // Re-select it for the current anonymous user before enabling edits.
         void selectSharedParticipant(opened.billId, remembered).then((next) => {
           if (!isCurrent()) return;
-          if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+          if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
             revisionSeen.current = next.revision;
+            confirmationRevisionSeen.current = next.confirmationRevision;
             setSnapshot(next);
           }
+          selectedPersonIdRef.current = remembered;
           setSelectedPersonId(remembered);
         }, (caught) => {
           if (isCurrent()) setError(sharedErrorMessage(caught));
@@ -172,6 +206,7 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     if (!snapshot || !selectedPersonId) return;
     if (reconcileFriendSelection(selectionStorage(), publicId, selectedPersonId, snapshot.participants)) return;
     /* eslint-disable react-hooks/set-state-in-effect -- A remote owner edit can remove this selected participant. */
+    selectedPersonIdRef.current = "";
     setSelectedPersonId("");
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [publicId, selectedPersonId, snapshot]);
@@ -204,22 +239,38 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   }, [snapshot]);
   const labels = participantLabels(snapshot?.participants ?? []);
   const currentPerson = snapshot?.participants.find((person) => person.id === selectedPersonId);
-  const canEdit = Boolean(currentPerson && billId && !pending && syncStatus === "live");
+  const canEdit = Boolean(currentPerson && billId && !snapshot?.closedAt && !pending && syncStatus === "live");
 
   async function choosePerson(participantId: string) {
-    if (!participantId || !billId || pending || syncStatus === "offline") return;
+    if (!participantId) {
+      selectedPersonIdRef.current = "";
+      setSelectedPersonId("");
+      rememberFriendSelection(selectionStorage(), publicId, "");
+      return;
+    }
+    if (!billId || snapshot?.closedAt || pending || syncStatus === "offline") return;
     const generation = openGeneration.current;
+    const previousParticipantId = selectedPersonIdRef.current;
+    selectedPersonIdRef.current = participantId;
     setPending(true); setError(""); setNotice("");
     try {
       const next = await selectSharedParticipant(billId, participantId);
       if (generation !== openGeneration.current) return;
-      if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+      if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
         revisionSeen.current = next.revision;
+        confirmationRevisionSeen.current = next.confirmationRevision;
         setSnapshot(next);
       }
       setSelectedPersonId(participantId);
       rememberFriendSelection(selectionStorage(), publicId, participantId);
-    } catch (caught) { if (generation === openGeneration.current) setError(sharedErrorMessage(caught)); }
+      void reload(billId, generation, participantId);
+    } catch (caught) {
+      if (generation === openGeneration.current) {
+        selectedPersonIdRef.current = previousParticipantId;
+        setError(sharedErrorMessage(caught));
+        void reload(billId, generation, previousParticipantId);
+      }
+    }
     finally { if (generation === openGeneration.current) setPending(false); }
   }
 
@@ -230,8 +281,9 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     try {
       const next = await toggleSharedParticipation(billId, receiptId, itemId, selectedPersonId, selected, snapshot.revision);
       if (generation !== openGeneration.current) return;
-      if (shouldApplyRemoteRevision(revisionSeen.current, next.revision)) {
+      if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
         revisionSeen.current = next.revision;
+        confirmationRevisionSeen.current = next.confirmationRevision;
         setSnapshot(next);
       }
     } catch (caught) {
@@ -243,6 +295,20 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
     } finally { if (generation === openGeneration.current) setPending(false); }
   }
 
+  async function confirmOwnStatus(confirmed: boolean) {
+    if (!canEdit || !snapshot || !selectedPersonId) return;
+    const generation = openGeneration.current;
+    setPending(true); setError("");
+    try {
+      const next = await confirmSharedParticipant(billId, selectedPersonId, confirmed, snapshot.revision);
+      if (generation !== openGeneration.current) return;
+      if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
+        revisionSeen.current = next.revision; confirmationRevisionSeen.current = next.confirmationRevision; setSnapshot(next);
+      }
+    } catch (caught) { if (generation === openGeneration.current) { await reload(billId); setError(sharedErrorMessage(caught)); } }
+    finally { if (generation === openGeneration.current) setPending(false); }
+  }
+
   if (ownerRecovery) return <OwnerApp recovery={ownerRecovery}/>;
   if (joinedOwner) return <OwnerApp joinedOwner={joinedOwner}/>;
 
@@ -252,8 +318,9 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       {viewStatus === "loading" && <div role="status" className="card p-6">กำลังเปิดบิลที่แชร์…</div>}
       {viewStatus === "error" && <div role="alert" className="card p-6"><h1 className="section-title">เปิดบิลไม่ได้</h1><p className="error mt-3">{error}</p><button className="btn-secondary mt-4" onClick={() => window.location.reload()}>ลองเปิดใหม่</button></div>}
       {viewStatus === "ready" && snapshot && <>
-        <div className="card p-5 sm:p-7"><p className="eyebrow">Shared bill</p><h1 className="mt-2 break-words text-3xl font-black">{snapshot.title}</h1><p className="muted mt-2 text-sm">เลือกชื่อของคุณ แล้วเลือกเฉพาะรายการที่ร่วมจ่าย</p><p role="status" aria-live="polite" className={`mt-3 text-sm ${syncStatus === "offline" || syncStatus === "stale" ? "error" : "muted"}`}>{syncStatus === "live" ? "เชื่อมต่อสดแล้ว" : syncStatus === "connecting" ? "กำลังเชื่อมต่อข้อมูลล่าสุด…" : syncStatus === "offline" ? "ออฟไลน์อยู่" : "การเชื่อมต่อสดขัดข้อง กดโหลดใหม่ได้"}</p><button type="button" className="btn-secondary mt-3" onClick={reloadAndReconnect} disabled={pending || !navigator.onLine}>โหลดข้อมูลล่าสุดและเชื่อมต่อใหม่</button></div>
-        <div className="card p-5 sm:p-7"><label htmlFor="friend-identity" className="mb-2 block font-bold">ฉันคือ</label><select id="friend-identity" className="field" value={selectedPersonId} disabled={pending} onChange={(event) => void choosePerson(event.target.value)}><option value="">เลือกชื่อของคุณ</option>{snapshot.participants.map((person) => <option key={person.id} value={person.id}>{labels.get(person.id)}</option>)}</select>{currentPerson && <p className="muted mt-2 text-sm">กำลังแก้ไขรายการของ {labels.get(currentPerson.id)}</p>}</div>
+        <div className="card p-5 sm:p-7"><p className="eyebrow">Shared bill</p><h1 className="mt-2 break-words text-3xl font-black">{snapshot.title}</h1><p className="muted mt-2 text-sm">{snapshot.closedAt ? "บิลปิดแล้ว ดูสรุปได้อย่างเดียว" : "เลือกชื่อของคุณ แล้วเลือกเฉพาะรายการที่ร่วมจ่าย"}</p>{snapshot.closedAt && <p role="status" className="mt-2 rounded-full bg-[#eee9fa] px-3 py-1 text-sm font-bold">ปิดบิลแล้ว</p>}<p role="status" aria-live="polite" className={`mt-3 text-sm ${syncStatus === "offline" || syncStatus === "stale" ? "error" : "muted"}`}>{syncStatus === "live" ? "เชื่อมต่อสดแล้ว" : syncStatus === "connecting" ? "กำลังเชื่อมต่อข้อมูลล่าสุด…" : syncStatus === "offline" ? "ออฟไลน์อยู่" : "การเชื่อมต่อสดขัดข้อง กดโหลดใหม่ได้"}</p><button type="button" className="btn-secondary mt-3" onClick={reloadAndReconnect} disabled={pending || !navigator.onLine}>โหลดข้อมูลล่าสุดและเชื่อมต่อใหม่</button></div>
+        <div className="card p-5 sm:p-7"><label htmlFor="friend-identity" className="mb-2 block font-bold">ฉันคือ</label><select id="friend-identity" className="field" value={selectedPersonId} disabled={pending || Boolean(snapshot.closedAt)} onChange={(event) => void choosePerson(event.target.value)}><option value="">เลือกชื่อของคุณ</option>{snapshot.participants.map((person) => <option key={person.id} value={person.id}>{labels.get(person.id)}</option>)}</select>{currentPerson && <p className="muted mt-2 text-sm">{snapshot.closedAt ? "กำลังดูสรุปของ" : "กำลังแก้ไขรายการของ"} {labels.get(currentPerson.id)}</p>}</div>
+        {currentPerson && <div className="card p-5 sm:p-7"><h2 className="section-title">ตรวจยอดของฉัน</h2>{(() => { const status = snapshot.confirmations.find((entry) => entry.participantId === currentPerson.id); const current = status?.confirmedContentRevision === snapshot.revision; return <><p className="muted mt-2">{current ? "ยืนยันยอดล่าสุดแล้ว" : status?.viewedAt ? "ดูแล้ว ยังไม่ยืนยันยอดล่าสุด" : "ยังไม่ยืนยันยอดล่าสุด"}</p><button type="button" className="btn-primary mt-4" disabled={!canEdit} onClick={() => void confirmOwnStatus(!current)}>{current ? "ยกเลิกคำยืนยัน" : "ยืนยันยอดของฉัน"}</button></>; })()}</div>}
         {error && <p role="alert" className="error rounded-xl bg-white p-4">{error}</p>}{notice && <p role="status" className="muted rounded-xl bg-white p-4">{notice}</p>}
         <section aria-label="ใบเสร็จและรายการ" className="space-y-5">{snapshot.receipts.map((receipt) => <div key={receipt.id} className="card p-5 sm:p-7"><h2 className="section-title wrap-anywhere">{receipt.title}</h2><p className="muted mt-1 text-sm wrap-anywhere">จ่ายโดย {labels.get(receipt.paidByParticipantId) ?? "ยังไม่ระบุ"}</p><ul className="mt-4 space-y-3">{receipt.items.map((item) => { const selected = Boolean(currentPerson && item.participantIds.includes(currentPerson.id)); return <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#eeeaf6] p-4"><div className="min-w-0 flex-1"><p className="font-bold wrap-anywhere">{item.name}</p><p className="muted text-sm">{formatMoney(item.price, snapshot.currency)} · ร่วม {item.participantIds.length} คน</p></div><button type="button" className="chip min-w-24 shrink-0" data-selected={selected} aria-pressed={selected} aria-label={`${selected ? "เลิกร่วม" : "ร่วม"}รายการ ${receipt.title} · ${item.name}`} disabled={!canEdit} onClick={() => void toggle(receipt.id, item.id, !selected)}>{selected ? "✓ ร่วมจ่าย" : "ร่วมจ่าย"}</button></li>; })}</ul></div>)}</section>
         {result ? <section aria-labelledby="friend-summary-title"><h2 id="friend-summary-title" className="section-title mb-4">สรุปยอดล่าสุด</h2><SessionSummary result={result} session={snapshot} focusParticipantId={currentPerson?.id ?? ""}/></section> : <p className="muted card p-5">เมื่อรายการและผู้จ่ายครบ สรุปยอดจะปรากฏที่นี่</p>}
