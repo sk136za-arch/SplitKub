@@ -10,6 +10,8 @@ SplitKub now supports multiple receipts in one split session. Each receipt has i
 
 Multiple friends may now select the same participant name. Each browser session remembers its own choice, and deleting that participant clears the choice without deleting friend memberships.
 
+The owner and friend interfaces now support Thai and English. Thai remains the default; each browser stores its own language preference separately from bill content. Copy text and PNG labels follow the active language, while entered names, amounts, payment routes, and remote revisions remain unchanged.
+
 ## Implementation Plan
 
 Extend the domain and calculation engine first, migrate V1 local data without destructive writes, add normalized Supabase storage/RPC/RLS/Realtime infrastructure, then replace the single-bill UI with owner and friend flows. Preserve integer money, deterministic remainder allocation, QR browser-only behavior, clipboard/image fallbacks, mascot branding, and mobile-first accessibility.
@@ -37,6 +39,7 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 - Added per-receipt adjustments: optional pre-item discount, service charge, VAT, and post-total discount, calculated with integer minor units, half-up fee totals, and stable largest-remainder allocation. Item breakdown rows include allocated fees; discounts are separate negative rows. All stored receipts carry a complete adjustment object. Local drafts migrate copy-on-write to V4; older remote snapshots default only wholly missing adjustment objects. A new additive SQL migration validates/stores adjustments and advertises `receiptAdjustmentsVersion=1`; enabled adjustments require this capability and are checked after write. Owner editor, Summary, copied text, and PNG show adjustment components.
 - Added V5 copy-on-write local state and role-filtered participant review statuses. A separate confirmation revision lets review changes refresh without mutating content revision; content edits stale old confirmations. An additive SQL migration records viewed/confirmed timestamps, gates review and permanent close RPCs, and prevents all content mutations after close. Owner sees all statuses and must explicitly acknowledge incomplete confirmations in the close dialog; friends see only their own selected status. Closed bills remain readable and shareable.
 - Replaced the owner review dropdown-only view with an always-visible participant status list. It shows the current-revision confirmation count, duplicate-safe names, viewed/confirmed timestamps, and distinct unread, viewed, stale, and confirmed states while keeping owner self-confirmation as a separate single-person control.
+- Added browser-local Thai/English presentation with Thai as the default. Owner and friend UI, validation, shared errors, copied summaries, accessibility labels, dates, and PNG output follow the current browser language without adding language to bill data or Supabase payloads. The typed UI catalog catches missing keys at compile time, and PNG cache identities include the language.
 - The friend client stores each bill's chosen participant ID in sessionStorage, re-selects that ID for the current anonymous user after opening a link, clears it when a canonical snapshot removes that participant, and ignores late responses after a link change. An old backend returning the former exclusive-choice error now prompts for the migration.
 
 ## Architecture Decisions
@@ -51,8 +54,11 @@ Extend the domain and calculation engine first, migrate V1 local data without de
 - Shared data expires 90 days after creation, independent of later edits.
 - Direct routes use stable participant-order greedy debtor/creditor pairing; no globally minimal transfer count is claimed. Collector routes are gross and intentionally do not net. Transfer lists are derived and never persisted.
 - Display route amounts may be one or more minor units above the ledger to avoid showing less than exact rational debt. The difference cannot add, remove, reorder, or retarget a route; payment instructions use displayed amounts while the paid/owed/net ledger remains available separately. The image cache includes item split inputs so a changed raw fraction invalidates the image.
+- Language is a device-level presentation preference stored under `splitkub:language:v1`; it never changes bill revisions, shared snapshots, or user-entered names and titles.
 
 ## Tests
+
+Localization checks cover safe language-preference storage fallback, accessible language controls, owner/friend-facing components, exhaustive shared errors, English copy, localized manual-copy fallback and migration notices, and language-sensitive PNG output/cache identity. The full local suite passed at 29 files / 171 tests; lint and TypeScript checking passed. The production build passed when run outside the restricted workspace sandbox.
 
 `npm run test -- --pool=threads --maxWorkers=1 --no-file-parallelism` passed: 27 files, 157 tests after the owner review-list change. Coverage includes all four review states, current-revision counts, timestamps, duplicate labels, closed read-only rendering, V4→V5 recovery, remote review normalization, and previous calculation/routing/shared-link regressions. SQL pgTAP still requires a working local Supabase/Docker environment.
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { LanguageProvider } from "@/components/LanguageProvider";
 
 export const metadata: Metadata = {
   title: "SplitKub — หารบิลง่ายในไม่กี่นาที",
@@ -11,5 +12,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="th"><body>{children}</body></html>;
+  return <html lang="th"><body><LanguageProvider>{children}</LanguageProvider></body></html>;
 }

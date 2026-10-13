@@ -4,6 +4,7 @@ import { participantLabels } from "./participantLabels";
 import { isValidPromptPay } from "./promptpay";
 import { displayPaymentTotals, summaryTransferRows } from "./summaryTransferPresentation";
 import type { Currency, SplitSession } from "../types/bill";
+import { localize, type AppLanguage } from "./language";
 
 export const SHARE_TITLE = "Dinner 🍻";
 
@@ -32,19 +33,20 @@ export function sharingAvailability(currency: Currency, promptPay: string, hasQr
   };
 }
 
-export function buildShareText(result: BillResult, currency: Currency, promptPay: string): string {
+export function buildShareText(result: BillResult, currency: Currency, promptPay: string, language: AppLanguage = "th"): string {
+  const l = (thai: string, english: string) => localize(language, thai, english);
   const labels = participantLabels(result.people.map((person) => ({ id: person.participantId, name: person.name })));
   const lines = [
     SHARE_TITLE,
-    `ยอดรวม: ${formatMoney(result.total, currency)}`,
+    `${l("ยอดรวม", "Total")}: ${formatMoney(result.total, currency)}`,
     "",
-    "ยอดที่แต่ละคนต้องโอน",
+    l("ยอดที่แต่ละคนต้องโอน", "Amount each person owes"),
     ...result.people.map((person) => `${labels.get(person.participantId)}: ${formatMoney(person.total, currency)}`),
   ];
   if (currency === "THB" && isValidPromptPay(promptPay)) {
     lines.push("", `PromptPay: ${normalizedPromptPay(promptPay)}`);
   } else if (currency === "USD") {
-    lines.push("", "ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน");
+    lines.push("", l("ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน", "Pay using the QR code in the attached summary"));
   }
   return lines.join("\n");
 }
@@ -58,43 +60,44 @@ export function sessionSharingAvailability(result: SessionResult | null, session
   };
 }
 
-export function buildSessionShareText(result: SessionResult, session: SplitSession): string {
+export function buildSessionShareText(result: SessionResult, session: SplitSession, language: AppLanguage = "th"): string {
+  const l = (thai: string, english: string) => localize(language, thai, english);
   const labels = participantLabels(session.participants);
   const displayTransfers = summaryTransferRows(session, result);
   const paymentTotals = displayPaymentTotals(session.participants.map((person) => person.id), displayTransfers);
   const lines = [
     session.title,
-    `ยอดรวม: ${formatMoney(result.total, session.currency)}`,
+    `${l("ยอดรวม", "Total")}: ${formatMoney(result.total, session.currency)}`,
     "",
-    "ใบเสร็จ",
+    l("ใบเสร็จ", "Receipts"),
     ...result.receipts.flatMap((receipt) => [
-      `${receipt.title} · จ่ายโดย ${labels.get(receipt.paidByParticipantId)}: ${formatMoney(receipt.total, session.currency)}`,
-      `  รายการ ${formatMoney(receipt.subtotal, session.currency)}${receipt.preDiscount ? ` − ลดก่อน ${formatMoney(receipt.preDiscount, session.currency)}` : ""}${receipt.serviceCharge ? ` + ค่าบริการ ${formatMoney(receipt.serviceCharge, session.currency)}` : ""}${receipt.vat ? ` + VAT ${formatMoney(receipt.vat, session.currency)}` : ""}${receipt.postDiscount ? ` − ลดหลัง ${formatMoney(receipt.postDiscount, session.currency)}` : ""}`,
+      `${receipt.title} · ${l("จ่ายโดย", "Paid by")} ${labels.get(receipt.paidByParticipantId)}: ${formatMoney(receipt.total, session.currency)}`,
+      `  ${l("รายการ", "Items")} ${formatMoney(receipt.subtotal, session.currency)}${receipt.preDiscount ? ` − ${l("ลดก่อน", "Pre-service discount")} ${formatMoney(receipt.preDiscount, session.currency)}` : ""}${receipt.serviceCharge ? ` + ${l("ค่าบริการ", "Service charge")} ${formatMoney(receipt.serviceCharge, session.currency)}` : ""}${receipt.vat ? ` + VAT ${formatMoney(receipt.vat, session.currency)}` : ""}${receipt.postDiscount ? ` − ${l("ลดหลัง", "Post-tax discount")} ${formatMoney(receipt.postDiscount, session.currency)}` : ""}`,
     ]),
     "",
-    "ยอดที่ต้องโอนและรับ",
-    ...paymentTotals.map((person) => `${labels.get(person.participantId)}: ต้องโอน ${formatMoney(person.outgoing, session.currency)} · จะรับ ${formatMoney(person.incoming, session.currency)}`),
+    l("ยอดที่ต้องโอนและรับ", "Amounts to send and receive"),
+    ...paymentTotals.map((person) => `${labels.get(person.participantId)}: ${l("ต้องโอน", "Send")} ${formatMoney(person.outgoing, session.currency)} · ${l("จะรับ", "Receive")} ${formatMoney(person.incoming, session.currency)}`),
     "",
-    "ยอดสุทธิรายคน",
-    ...result.people.map((person) => `${labels.get(person.participantId)}: จ่ายไป ${formatMoney(person.paid, session.currency)} · ส่วนที่หาร ${formatMoney(person.owed, session.currency)} · ${person.net > 0 ? "รับคืน" : person.net < 0 ? "ต้องจ่าย" : "พอดี"} ${formatMoney(Math.abs(person.net), session.currency)}`),
+    l("ยอดสุทธิรายคน", "Net balance by person"),
+    ...result.people.map((person) => `${labels.get(person.participantId)}: ${l("จ่ายไป", "Paid")} ${formatMoney(person.paid, session.currency)} · ${l("ส่วนที่หาร", "Share")} ${formatMoney(person.owed, session.currency)} · ${person.net > 0 ? l("รับคืน", "Refund") : person.net < 0 ? l("ต้องจ่าย", "Owes") : l("พอดี", "Settled")} ${formatMoney(Math.abs(person.net), session.currency)}`),
   ];
-  lines.push("", session.settlementMode === "collector" ? "เส้นทางโอนผ่านคนรวบรวมเงิน" : "เส้นทางโอนตรง");
-  if (displayTransfers.length === 0) lines.push("ไม่มีรายการโอนเงิน");
+  lines.push("", session.settlementMode === "collector" ? l("เส้นทางโอนผ่านคนรวบรวมเงิน", "Transfers via collector") : l("เส้นทางโอนตรง", "Direct transfers"));
+  if (displayTransfers.length === 0) lines.push(l("ไม่มีรายการโอนเงิน", "No transfers required"));
   for (const transfer of displayTransfers) {
     lines.push(`${labels.get(transfer.fromParticipantId)} → ${labels.get(transfer.toParticipantId)}: ${formatMoney(transfer.amount, session.currency)}`);
     if (transfer.kind === "reimbursement") {
-      for (const receipt of transfer.receiptBreakdown) lines.push(`  คืน ${receipt.receiptTitle}: ${formatMoney(receipt.amount, session.currency)}`);
+      for (const receipt of transfer.receiptBreakdown) lines.push(`  ${l("คืน", "Reimburse")} ${receipt.receiptTitle}: ${formatMoney(receipt.amount, session.currency)}`);
     }
   }
   const receivers = settlementDestinations(result, session);
   if (session.currency === "THB" && receivers.length > 0) {
-    lines.push("", "ช่องทางรับเงิน");
+    lines.push("", l("ช่องทางรับเงิน", "Payment details"));
     for (const id of receivers) {
       const promptPay = session.participants.find((person) => person.id === id)?.promptPay ?? "";
       if (isValidPromptPay(promptPay)) lines.push(`${labels.get(id)} · PromptPay: ${normalizedPromptPay(promptPay)}`);
     }
   } else if (session.currency === "USD" && receivers.length > 0) {
-    lines.push("", "ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน");
+    lines.push("", l("ชำระผ่าน QR ในรูปสรุปบิลที่ส่งมาพร้อมกัน", "Pay using the QR code in the attached summary"));
   }
   return lines.join("\n");
 }

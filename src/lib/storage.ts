@@ -1,6 +1,7 @@
 import type { Bill, SplitSession } from "@/types/bill";
 import { emptyBill } from "./billState";
 import { addMissingReceiptAdjustments, defaultReceiptAdjustments, isReceiptAdjustments } from "./receiptAdjustments";
+import { localize, type AppLanguage } from "./language";
 
 export const STORAGE_KEY = "splitkub:bill:v1";
 const VERSION = 1;
@@ -12,8 +13,10 @@ const SESSION_VERSION = 5;
 export const SESSION_MIGRATION_NOTICE_KEY = "splitkub:session:migration-notice:v1";
 export const SESSION_PENDING_PROMPTPAY_KEY = "splitkub:session:pending-promptpay:v1";
 export const SESSION_PROMPTPAY_MIGRATION_RESOLVED_KEY = "splitkub:session:promptpay-migration-resolved:v1";
-export function legacyPromptPayMigrationNotice(value: string): string {
-  return `พบ PromptPay เดิม (${value}) ซึ่งยังไม่ได้ผูกกับคนใด กรุณาเลือกผู้รับ หรือทิ้งเลขนี้อย่างชัดเจน`;
+export function legacyPromptPayMigrationNotice(value: string, language: AppLanguage = "th"): string {
+  return localize(language,
+    `พบ PromptPay เดิม (${value}) ซึ่งยังไม่ได้ผูกกับคนใด กรุณาเลือกผู้รับ หรือทิ้งเลขนี้อย่างชัดเจน`,
+    `Found a legacy PromptPay number (${value}) that is not assigned to anyone. Choose its recipient or explicitly discard it.`);
 }
 
 export function shouldPersistBill(started: boolean, bill: Bill): boolean {
@@ -176,10 +179,10 @@ export function migrateV4Session(value: unknown): SplitSession | null {
   return isSession(migrated) ? migrated : null;
 }
 
-export function sessionMigrationNotice(storage: Pick<Storage, "getItem">): string {
+export function sessionMigrationNotice(storage: Pick<Storage, "getItem">, language: AppLanguage = "th"): string {
   try {
     const value = pendingLegacyPromptPay(storage);
-    return value ? legacyPromptPayMigrationNotice(value) : "";
+    return value ? legacyPromptPayMigrationNotice(value, language) : "";
   } catch { return ""; }
 }
 

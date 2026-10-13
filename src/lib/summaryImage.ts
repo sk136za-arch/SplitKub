@@ -5,6 +5,7 @@ import { isValidPromptPay } from "./promptpay";
 import { normalizedPromptPay, SHARE_TITLE } from "./share";
 import { displayPaymentTotals, summaryTransferRows } from "./summaryTransferPresentation";
 import type { Currency, SplitSession } from "../types/bill";
+import { localize, type AppLanguage } from "./language";
 
 const WIDTH = 1080;
 const ROW_HEIGHT = 106;
@@ -12,15 +13,16 @@ const ROW_START = 520;
 const MAX_HEIGHT = 16384;
 const MASCOT_URL = "/brand/splitkub-mascot.png";
 
-export function summaryImageHeight(participantCount: number): number {
+export function summaryImageHeight(participantCount: number, language: AppLanguage = "th"): number {
   const height = ROW_START + participantCount * ROW_HEIGHT + 590;
-  if (height > MAX_HEIGHT) throw new Error("มีผู้ร่วมบิลมากเกินไปสำหรับรูปเดียว");
+  if (height > MAX_HEIGHT) throw new Error(localize(language, "มีผู้ร่วมบิลมากเกินไปสำหรับรูปเดียว", "Too many participants for one image"));
   return height;
 }
 
 /** Stable identity for every value rendered into the summary image. */
-export function summaryImageCacheKey(result: BillResult, currency: Currency, promptPay: string, qrUrl: string): string {
+export function summaryImageCacheKey(result: BillResult, currency: Currency, promptPay: string, qrUrl: string, language: AppLanguage = "th"): string {
   return JSON.stringify([
+    language,
     currency,
     promptPay,
     qrUrl,
@@ -69,11 +71,11 @@ function wrappedLines(ctx: CanvasRenderingContext2D, value: string, maxWidth: nu
   return lines;
 }
 
-function loadQr(url: string): Promise<HTMLImageElement> {
+function loadQr(url: string, language: AppLanguage = "th"): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("อ่านรูป QR ไม่สำเร็จ กรุณาอัปโหลดใหม่"));
+    image.onerror = () => reject(new Error(localize(language, "อ่านรูป QR ไม่สำเร็จ กรุณาอัปโหลดใหม่", "Could not read the QR image. Upload it again")));
     image.src = url;
   });
 }
@@ -87,15 +89,16 @@ function loadMascot(): Promise<HTMLImageElement | null> {
   });
 }
 
-export async function createSummaryImage(result: BillResult, currency: Currency, promptPay: string, qrUrl: string): Promise<Blob> {
-  const [qr, mascot] = await Promise.all([loadQr(qrUrl), loadMascot()]);
-  if (!qr.naturalWidth || !qr.naturalHeight) throw new Error("รูป QR ไม่ถูกต้อง กรุณาอัปโหลดใหม่");
+export async function createSummaryImage(result: BillResult, currency: Currency, promptPay: string, qrUrl: string, language: AppLanguage = "th"): Promise<Blob> {
+  const l = (thai: string, english: string) => localize(language, thai, english);
+  const [qr, mascot] = await Promise.all([loadQr(qrUrl, language), loadMascot()]);
+  if (!qr.naturalWidth || !qr.naturalHeight) throw new Error(l("รูป QR ไม่ถูกต้อง กรุณาอัปโหลดใหม่", "Invalid QR image. Upload it again"));
 
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
-  canvas.height = summaryImageHeight(result.people.length);
+  canvas.height = summaryImageHeight(result.people.length, language);
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Browser นี้ไม่สามารถสร้างรูปสรุปได้");
+  if (!ctx) throw new Error(l("Browser นี้ไม่สามารถสร้างรูปสรุปได้", "This browser cannot create a summary image"));
   const labels = participantLabels(result.people.map((person) => ({ id: person.participantId, name: person.name })));
 
   ctx.fillStyle = "#f7f5ff";
@@ -126,21 +129,21 @@ export async function createSummaryImage(result: BillResult, currency: Currency,
   ctx.fillText(SHARE_TITLE, 72, 185);
   ctx.fillStyle = "#726d82";
   ctx.font = "28px Arial, sans-serif";
-  ctx.fillText("สรุปบิลและช่องทางรับเงิน", 72, 230);
+  ctx.fillText(l("สรุปบิลและช่องทางรับเงิน", "Bill summary and payment details"), 72, 230);
 
   ctx.fillStyle = "#6241b6";
   roundRect(ctx, 72, 270, 936, 172, 30);
   ctx.fill();
   ctx.fillStyle = "#e9ddff";
   ctx.font = "28px Arial, sans-serif";
-  ctx.fillText("ยอดรวมทั้งหมด · " + currency, 112, 325);
+  ctx.fillText(l("ยอดรวมทั้งหมด", "Total") + " · " + currency, 112, 325);
   ctx.fillStyle = "#ffffff";
   ctx.font = "bold 66px Arial, sans-serif";
   ctx.fillText(formatMoney(result.total, currency), 112, 405);
 
   ctx.fillStyle = "#25213b";
   ctx.font = "bold 32px Arial, sans-serif";
-  ctx.fillText("ยอดที่แต่ละคนต้องโอน", 72, 492);
+  ctx.fillText(l("ยอดที่แต่ละคนต้องโอน", "Amount each person owes"), 72, 492);
 
   result.people.forEach((person, index) => {
     const y = ROW_START + index * ROW_HEIGHT;
@@ -169,16 +172,16 @@ export async function createSummaryImage(result: BillResult, currency: Currency,
   const paymentY = ROW_START + result.people.length * ROW_HEIGHT + 30;
   ctx.fillStyle = "#25213b";
   ctx.font = "bold 32px Arial, sans-serif";
-  ctx.fillText("ช่องทางรับเงิน", 72, paymentY + 3);
+  ctx.fillText(l("ช่องทางรับเงิน", "Payment details"), 72, paymentY + 3);
   ctx.fillStyle = "#ffffff";
   roundRect(ctx, 72, paymentY + 30, 936, 405, 28);
   ctx.fill();
   ctx.fillStyle = "#5331aa";
   ctx.font = "bold 30px Arial, sans-serif";
-  ctx.fillText(currency === "THB" ? "สแกนเพื่อโอนเงิน" : "Pay with QR", 112, paymentY + 100);
+  ctx.fillText(currency === "THB" ? l("สแกนเพื่อโอนเงิน", "Scan to pay") : l("ชำระผ่าน QR", "Pay with QR"), 112, paymentY + 100);
   ctx.fillStyle = "#726d82";
   ctx.font = "25px Arial, sans-serif";
-  ctx.fillText("QR สำหรับชำระบิลนี้", 112, paymentY + 146);
+  ctx.fillText(l("QR สำหรับชำระบิลนี้", "QR for this bill"), 112, paymentY + 146);
   if (currency === "THB" && isValidPromptPay(promptPay)) {
     ctx.fillStyle = "#5331aa";
     ctx.font = "bold 23px Arial, sans-serif";
@@ -198,16 +201,16 @@ export async function createSummaryImage(result: BillResult, currency: Currency,
 
   ctx.fillStyle = "#817b8e";
   ctx.font = "22px Arial, sans-serif";
-  ctx.fillText("SplitKub · หารบิลแล้วไปสนุกต่อ", 72, canvas.height - 65);
+  ctx.fillText(l("SplitKub · หารบิลแล้วไปสนุกต่อ", "SplitKub · Split and enjoy"), 72, canvas.height - 65);
 
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("สร้างไฟล์รูปไม่สำเร็จ")), "image/png");
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(l("สร้างไฟล์รูปไม่สำเร็จ", "Could not create the image file"))), "image/png");
   });
 }
 
-export function sessionSummaryImageCacheKey(result: SessionResult, session: SplitSession, qrUrl: string, qrReceiverId = ""): string {
+export function sessionSummaryImageCacheKey(result: SessionResult, session: SplitSession, qrUrl: string, qrReceiverId = "", language: AppLanguage = "th"): string {
   return JSON.stringify([
-    session.title, session.currency, session.settlementMode, session.collectorParticipantId, qrUrl, qrReceiverId, result.total,
+    language, session.title, session.currency, session.settlementMode, session.collectorParticipantId, qrUrl, qrReceiverId, result.total,
     result.receipts.map((receipt) => [receipt.receiptId, receipt.title, receipt.paidByParticipantId, receipt.subtotal, receipt.preDiscount, receipt.serviceCharge, receipt.vat, receipt.postDiscount, receipt.total]),
     result.people.map((person) => [person.participantId, person.name, person.paid, person.owed, person.net]),
     result.transfers.map((transfer) => [transfer.fromParticipantId, transfer.toParticipantId, transfer.amount, transfer.kind,
@@ -217,27 +220,28 @@ export function sessionSummaryImageCacheKey(result: SessionResult, session: Spli
   ]);
 }
 
-export function sessionSummaryImageHeight(receiptCount: number, personCount: number, receiverCount: number, routeHeight = 0): number {
+export function sessionSummaryImageHeight(receiptCount: number, personCount: number, receiverCount: number, routeHeight = 0, language: AppLanguage = "th"): number {
   const height = 1080 + receiptCount * 160 + personCount * 160 + receiverCount * 58 + routeHeight;
-  if (height > MAX_HEIGHT) throw new Error("มีข้อมูลมากเกินไปสำหรับรูปเดียว");
+  if (height > MAX_HEIGHT) throw new Error(localize(language, "มีข้อมูลมากเกินไปสำหรับรูปเดียว", "Too much information for one image"));
   return height;
 }
 
-export async function createSessionSummaryImage(result: SessionResult, session: SplitSession, qrUrl: string, qrReceiverId = ""): Promise<Blob> {
+export async function createSessionSummaryImage(result: SessionResult, session: SplitSession, qrUrl: string, qrReceiverId = "", language: AppLanguage = "th"): Promise<Blob> {
+  const l = (thai: string, english: string) => localize(language, thai, english);
   const receiverIds = settlementDestinations(result, session);
   const selectedReceiverId = qrReceiverId || (receiverIds.length === 1 ? receiverIds[0] : "");
-  if (!receiverIds.includes(selectedReceiverId)) throw new Error("เลือกผู้รับ QR จากเส้นทางโอนเงินจริงก่อนแชร์รูป");
+  if (!receiverIds.includes(selectedReceiverId)) throw new Error(l("เลือกผู้รับ QR จากเส้นทางโอนเงินจริงก่อนแชร์รูป", "Choose a real transfer recipient for this QR before sharing"));
   const displayTransfers = summaryTransferRows(session, result);
   const displayTotals = displayPaymentTotals(result.people.map((person) => person.participantId), displayTransfers);
   const displayTotalsById = new Map(displayTotals.map((total) => [total.participantId, total]));
-  const [qr, mascot] = await Promise.all([loadQr(qrUrl), loadMascot()]);
-  if (!qr.naturalWidth || !qr.naturalHeight) throw new Error("รูป QR ไม่ถูกต้อง กรุณาอัปโหลดใหม่");
+  const [qr, mascot] = await Promise.all([loadQr(qrUrl, language), loadMascot()]);
+  if (!qr.naturalWidth || !qr.naturalHeight) throw new Error(l("รูป QR ไม่ถูกต้อง กรุณาอัปโหลดใหม่", "Invalid QR image. Upload it again"));
   const routeHeight = 50 + displayTransfers.reduce((sum, transfer) => sum + 82 + transfer.receiptBreakdown.length * 28, 0);
   const canvas = document.createElement("canvas");
   canvas.width = WIDTH;
-  canvas.height = sessionSummaryImageHeight(result.receipts.length, result.people.length, receiverIds.length, routeHeight);
+  canvas.height = sessionSummaryImageHeight(result.receipts.length, result.people.length, receiverIds.length, routeHeight, language);
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Browser นี้ไม่สามารถสร้างรูปสรุปได้");
+  if (!ctx) throw new Error(l("Browser นี้ไม่สามารถสร้างรูปสรุปได้", "This browser cannot create a summary image"));
   const labels = participantLabels(session.participants);
 
   ctx.fillStyle = "#f7f5ff";
@@ -257,13 +261,13 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
   ctx.font = "bold 50px Arial, sans-serif";
   ctx.fillText(wrappedLines(ctx, session.title, 900)[0], 72, 190);
   ctx.fillStyle = "#726d82"; ctx.font = "27px Arial, sans-serif";
-  ctx.fillText("สรุปบิล · " + session.currency, 72, 232);
+  ctx.fillText(l("สรุปบิล", "Bill summary") + " · " + session.currency, 72, 232);
   ctx.fillStyle = "#6241b6"; roundRect(ctx, 72, 270, 936, 165, 28); ctx.fill();
-  ctx.fillStyle = "#e9ddff"; ctx.font = "27px Arial, sans-serif"; ctx.fillText("ยอดรวมทั้งหมด", 112, 322);
+  ctx.fillStyle = "#e9ddff"; ctx.font = "27px Arial, sans-serif"; ctx.fillText(l("ยอดรวมทั้งหมด", "Total"), 112, 322);
   ctx.fillStyle = "#ffffff"; ctx.font = "bold 62px Arial, sans-serif"; ctx.fillText(formatMoney(result.total, session.currency), 112, 402);
 
   let y = 490;
-  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText("ใบเสร็จ", 72, y);
+  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText(l("ใบเสร็จ", "Receipts"), 72, y);
   y += 26;
   for (const receipt of result.receipts) {
     ctx.fillStyle = "#ffffff"; roundRect(ctx, 72, y, 936, 148, 16); ctx.fill();
@@ -271,18 +275,18 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
     ctx.fillText(wrappedLines(ctx, receipt.title, 480)[0], 96, y + 36);
     ctx.fillStyle = "#5331aa"; ctx.textAlign = "right"; ctx.fillText(formatMoney(receipt.total, session.currency), 982, y + 36); ctx.textAlign = "left";
     ctx.fillStyle = "#726d82"; ctx.font = "20px Arial, sans-serif";
-    ctx.fillText(`จ่ายโดย ${labels.get(receipt.paidByParticipantId) ?? "ยังไม่ระบุ"}`, 96, y + 67);
-    const adjustmentLine = `รายการ ${formatMoney(receipt.subtotal, session.currency)}`
-      + (receipt.preDiscount ? ` − ลดก่อน ${formatMoney(receipt.preDiscount, session.currency)}` : "")
-      + (receipt.serviceCharge ? ` + ค่าบริการ ${formatMoney(receipt.serviceCharge, session.currency)}` : "")
+    ctx.fillText(`${l("จ่ายโดย", "Paid by")} ${labels.get(receipt.paidByParticipantId) ?? l("ยังไม่ระบุ", "Not set")}`, 96, y + 67);
+    const adjustmentLine = `${l("รายการ", "Items")} ${formatMoney(receipt.subtotal, session.currency)}`
+      + (receipt.preDiscount ? ` − ${l("ลดก่อน", "Pre-service discount")} ${formatMoney(receipt.preDiscount, session.currency)}` : "")
+      + (receipt.serviceCharge ? ` + ${l("ค่าบริการ", "Service charge")} ${formatMoney(receipt.serviceCharge, session.currency)}` : "")
       + (receipt.vat ? ` + VAT ${formatMoney(receipt.vat, session.currency)}` : "")
-      + (receipt.postDiscount ? ` − ลดหลัง ${formatMoney(receipt.postDiscount, session.currency)}` : "");
+      + (receipt.postDiscount ? ` − ${l("ลดหลัง", "Post-tax discount")} ${formatMoney(receipt.postDiscount, session.currency)}` : "");
     wrappedLines(ctx, adjustmentLine, 850).forEach((line, index) => ctx.fillText(line, 96, y + 99 + index * 25));
     y += 160;
   }
 
   y += 25;
-  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText("ยอดชำระรายคน", 72, y);
+  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText(l("ยอดชำระรายคน", "Payment by person"), 72, y);
   y += 26;
   for (const person of result.people) {
     ctx.fillStyle = "#ffffff"; roundRect(ctx, 72, y, 936, 148, 18); ctx.fill();
@@ -290,25 +294,25 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
     ctx.fillText(wrappedLines(ctx, labels.get(person.participantId) ?? person.name, 820)[0], 96, y + 34);
     const paymentTotal = displayTotalsById.get(person.participantId) ?? { outgoing: 0, incoming: 0 };
     const instructions = [
-      ...(paymentTotal.outgoing > 0 ? [`ต้องโอน ${formatMoney(paymentTotal.outgoing, session.currency)}`] : []),
-      ...(paymentTotal.incoming > 0 ? [`จะรับ ${formatMoney(paymentTotal.incoming, session.currency)}`] : []),
+      ...(paymentTotal.outgoing > 0 ? [`${l("ต้องโอน", "Send")} ${formatMoney(paymentTotal.outgoing, session.currency)}`] : []),
+      ...(paymentTotal.incoming > 0 ? [`${l("จะรับ", "Receive")} ${formatMoney(paymentTotal.incoming, session.currency)}`] : []),
     ];
-    const primaryInstruction = instructions.length ? instructions.join(" · ") : "ไม่มีรายการโอน";
+    const primaryInstruction = instructions.length ? instructions.join(" · ") : l("ไม่มีรายการโอน", "No transfers required");
     ctx.fillStyle = "#5331aa"; ctx.font = "bold 23px Arial, sans-serif";
     wrappedLines(ctx, primaryInstruction, 830).forEach((line, index) => ctx.fillText(line, 96, y + 75 + index * 27));
     const ledgerNet = person.net > 0
-      ? `รับสุทธิ ${formatMoney(person.net, session.currency)}`
+      ? `${l("รับสุทธิ", "Net to receive")} ${formatMoney(person.net, session.currency)}`
       : person.net < 0
-        ? `ต้องจ่ายสุทธิ ${formatMoney(Math.abs(person.net), session.currency)}`
-        : `พอดี ${formatMoney(0, session.currency)}`;
+        ? `${l("ต้องจ่ายสุทธิ", "Net to pay")} ${formatMoney(Math.abs(person.net), session.currency)}`
+        : `${l("พอดี", "Settled")} ${formatMoney(0, session.currency)}`;
     ctx.fillStyle = "#726d82"; ctx.font = "20px Arial, sans-serif";
-    ctx.fillText(`ยอดสุทธิในบัญชี: ${ledgerNet}`, 96, y + 132);
+    ctx.fillText(`${l("ยอดสุทธิในบัญชี", "Ledger net balance")}: ${ledgerNet}`, 96, y + 132);
     y += 160;
   }
 
   y += 32;
   ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif";
-  ctx.fillText(session.settlementMode === "collector" ? "เส้นทางโอนผ่านคนรวบรวมเงิน" : "เส้นทางโอนตรง", 72, y);
+  ctx.fillText(session.settlementMode === "collector" ? l("เส้นทางโอนผ่านคนรวบรวมเงิน", "Transfers via collector") : l("เส้นทางโอนตรง", "Direct transfers"), 72, y);
   y += 30;
   for (const transfer of displayTransfers) {
     const cardHeight = 72 + transfer.receiptBreakdown.length * 28;
@@ -320,21 +324,21 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
     if (transfer.receiptBreakdown.length) {
       ctx.fillStyle = "#726d82"; ctx.font = "20px Arial, sans-serif";
       transfer.receiptBreakdown.forEach((receipt, index) => {
-        ctx.fillText(wrappedLines(ctx, `คืน ${receipt.receiptTitle}: ${formatMoney(receipt.amount, session.currency)}`, 820)[0], 96, y + 61 + index * 28);
+        ctx.fillText(wrappedLines(ctx, `${l("คืน", "Reimburse")} ${receipt.receiptTitle}: ${formatMoney(receipt.amount, session.currency)}`, 820)[0], 96, y + 61 + index * 28);
       });
     }
     y += cardHeight + 10;
   }
 
   y += 32;
-  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText("ช่องทางรับเงิน", 72, y);
+  ctx.fillStyle = "#25213b"; ctx.font = "bold 31px Arial, sans-serif"; ctx.fillText(l("ช่องทางรับเงิน", "Payment details"), 72, y);
   y += 28;
   const paymentHeight = 342 + receiverIds.length * 58;
   ctx.fillStyle = "#ffffff"; roundRect(ctx, 72, y, 936, paymentHeight, 28); ctx.fill();
   ctx.fillStyle = "#5331aa"; ctx.font = "bold 27px Arial, sans-serif";
-  ctx.fillText("สแกน QR ที่แนบมา", 104, y + 61);
+  ctx.fillText(l("สแกน QR ที่แนบมา", "Scan the attached QR"), 104, y + 61);
   ctx.fillStyle = "#726d82"; ctx.font = "21px Arial, sans-serif";
-  ctx.fillText(`QR ของ ${labels.get(selectedReceiverId)}`, 104, y + 94);
+  ctx.fillText(`${l("QR ของ", "QR for")} ${labels.get(selectedReceiverId)}`, 104, y + 94);
   if (session.currency === "THB") {
     receiverIds.forEach((receiverId, index) => {
       const pay = session.participants.find((person) => person.id === receiverId)?.promptPay ?? "";
@@ -349,6 +353,6 @@ export async function createSessionSummaryImage(result: SessionResult, session: 
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(qr, 811 - qr.naturalWidth * scale / 2, qrY + 155 - qr.naturalHeight * scale / 2, qr.naturalWidth * scale, qr.naturalHeight * scale);
   ctx.fillStyle = "#817b8e"; ctx.font = "22px Arial, sans-serif";
-  ctx.fillText("SplitKub · หารบิลแล้วไปสนุกต่อ", 72, canvas.height - 56);
-  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("สร้างไฟล์รูปไม่สำเร็จ")), "image/png"));
+  ctx.fillText(l("SplitKub · หารบิลแล้วไปสนุกต่อ", "SplitKub · Split and enjoy"), 72, canvas.height - 56);
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error(l("สร้างไฟล์รูปไม่สำเร็จ", "Could not create the image file"))), "image/png"));
 }

@@ -151,6 +151,34 @@ describe("payment-first sharing", () => {
     }
   });
 
+  it("localizes the legacy USD QR heading on the canvas", async () => {
+    class WorkingImage {
+      onload: (() => void) | null = null;
+      naturalWidth = 320;
+      naturalHeight = 320;
+      set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    const fillText = vi.fn();
+    const ctx = {
+      fillRect: vi.fn(), beginPath: vi.fn(), arc: vi.fn(), fill: vi.fn(), moveTo: vi.fn(),
+      lineTo: vi.fn(), quadraticCurveTo: vi.fn(), closePath: vi.fn(), fillText, drawImage: vi.fn(),
+      measureText: (text: string) => ({ width: text.length * 15 }),
+    };
+    const png = new Blob(["png"], { type: "image/png" });
+    const canvas = { width: 0, height: 0, getContext: () => ctx, toBlob: (callback: (blob: Blob) => void) => callback(png) };
+    vi.stubGlobal("Image", WorkingImage);
+    vi.stubGlobal("document", { createElement: () => canvas });
+    try {
+      await createSummaryImage(result, "USD", "", "blob:valid", "th");
+      expect(fillText.mock.calls.some(([text]) => text === "ชำระผ่าน QR")).toBe(true);
+      fillText.mockClear();
+      await createSummaryImage(result, "USD", "", "blob:valid", "en");
+      expect(fillText.mock.calls.some(([text]) => text === "Pay with QR")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses the text brand fallback when the mascot fails without dropping the QR", async () => {
     class SelectiveImage {
       onload: (() => void) | null = null;

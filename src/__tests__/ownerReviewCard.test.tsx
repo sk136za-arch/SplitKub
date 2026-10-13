@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { OwnerReviewCard } from "../components/OwnerReviewCard";
+import { LanguageProvider } from "../components/LanguageProvider";
 import { emptySession } from "../lib/billState";
 import type { SplitSession } from "../types/bill";
 
@@ -22,11 +23,11 @@ function reviewSession(): SplitSession {
   };
 }
 
-function render(session = reviewSession(), selectedParticipantId = "c", disabled = false) {
-  return renderToStaticMarkup(createElement(OwnerReviewCard, {
+function render(session = reviewSession(), selectedParticipantId = "c", disabled = false, language: "th" | "en" = "th") {
+  return renderToStaticMarkup(createElement(LanguageProvider, { initialLanguage: language }, createElement(OwnerReviewCard, {
     session, selectedParticipantId, disabled,
     onSelectParticipant: vi.fn(), onConfirm: vi.fn(),
-  }));
+  })));
 }
 
 describe("owner review card", () => {
@@ -71,5 +72,17 @@ describe("owner review card", () => {
     const markup = render(reviewSession(), "c", true);
     expect(markup).toMatch(/<select[^>]*disabled/);
     expect(markup).toMatch(/<button[^>]*disabled/);
+  });
+
+  it("renders English review states and dates while preserving duplicate participant names", () => {
+    const markup = render(reviewSession(), "c", false, "en");
+    expect(markup).toContain("Confirmed 1/4 people");
+    expect(markup).toContain("Not viewed yet");
+    expect(markup).toContain("Viewed, not confirmed");
+    expect(markup).toContain("Confirmed for the latest bill");
+    expect(markup).toContain("Needs reconfirmation");
+    expect(markup).toContain("1. Alex");
+    expect(markup).toContain("Oct");
+    expect(markup).not.toContain("ยังไม่เปิดดู");
   });
 });
