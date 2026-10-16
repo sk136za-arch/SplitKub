@@ -1,5 +1,5 @@
-import { OwnerApp } from "@/components/OwnerApp";
+import { LandingPage } from "@/components/LandingPage";
 
 export default function Home() {
-  return <OwnerApp/>;
+  return <LandingPage/>;
 }

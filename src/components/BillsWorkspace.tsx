@@ -1,0 +1,23 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { calculateBill } from "@/lib/calculateBill";
+import { closeLocalBill, createLocalBill, deleteLocalBill, loadLocalBills, type LocalBillRecord } from "@/lib/localBills";
+import { formatMoney } from "@/lib/money";
+import { AppShell } from "./AppShell";
+import { useLanguage } from "./LanguageProvider";
+
+function billTotal(bill: LocalBillRecord) { try { return calculateBill(bill.session).total; } catch { return null; } }
+
+export function BillsWorkspace() {
+  const router = useRouter(); const { language } = useLanguage(); const [bills, setBills] = useState<LocalBillRecord[] | null>(null); const [error, setError] = useState("");
+  const t = (th: string, en: string) => language === "en" ? en : th;
+  const reload = useCallback(() => { try { setBills(loadLocalBills(window.localStorage)); } catch { setBills([]); setError(language === "en" ? "This browser cannot save data." : "เบราว์เซอร์นี้ไม่อนุญาตให้บันทึกข้อมูล"); } }, [language]);
+  useEffect(() => { const timer = window.setTimeout(reload, 0); return () => window.clearTimeout(timer); }, [reload]); // Browser storage only exists after hydration.
+  function create() { try { const bill = createLocalBill(window.localStorage); router.push(`/bills/${bill.id}`); } catch { setError(t("สร้างบิลใหม่ไม่สำเร็จ กรุณาตรวจการตั้งค่า browser", "Could not create a bill. Check your browser settings.")); } }
+  function close(id: string) { try { closeLocalBill(window.localStorage, id); reload(); } catch { setError(t("ปิดบิลไม่สำเร็จ", "Could not close the bill.")); } }
+  function remove(id: string) { if (!window.confirm(t("ลบบิลนี้ออกจากเบราว์เซอร์เครื่องนี้หรือไม่? การกระทำนี้ย้อนกลับไม่ได้", "Delete this bill from this browser? This cannot be undone."))) return; try { deleteLocalBill(window.localStorage, id); reload(); } catch { setError(t("ลบบิลไม่สำเร็จ", "Could not delete the bill.")); } }
+  return <AppShell><main className="workspace-shell"><aside className="workspace-sidebar"><p className="sidebar-title">{t("พื้นที่ของคุณ", "YOUR SPACE")}</p><button type="button" className="button button-primary" onClick={create}>+ {t("สร้างบิลใหม่", "Create bill")}</button><Link href="/bills" className="sidebar-link" aria-current="page">{t("บิลของฉัน", "My bills")}</Link><p className="sidebar-title sidebar-gap">{t("เร็ว ๆ นี้", "COMING SOON")}</p><span className="sidebar-muted">{t("บิลรายเดือน", "Recurring bills")}</span><span className="sidebar-muted">{t("กลุ่มเพื่อน", "Friend groups")}</span><span className="sidebar-muted">LINE {t("แจ้งเตือน", "reminders")}</span></aside><section className="workspace-content"><div className="workspace-heading"><div><p className="kicker">BROWSER-LOCAL</p><h1>{t("บิลของฉัน", "My bills")}</h1><p>{t("บิลเหล่านี้บันทึกอยู่ในเบราว์เซอร์เครื่องนี้เท่านั้น", "These bills are saved in this browser only.")}</p></div><button type="button" className="button button-primary" onClick={create}>+ {t("สร้างบิลใหม่", "Create bill")}</button></div>{error && <p className="error" role="alert">{error}</p>}{bills === null ? <p className="muted">{t("กำลังเปิดบิลของคุณ…", "Opening your bills…")}</p> : bills.length === 0 ? <div className="empty-state"><h2>{t("ยังไม่มีบิล", "No bills yet")}</h2><p>{t("เริ่มสร้างบิลแรกเพื่อแบ่งค่าใช้จ่ายกับเพื่อนได้เลย", "Create your first bill to split expenses with friends.")}</p><button type="button" className="button button-primary" onClick={create}>{t("เริ่มสร้างบิล", "Create a bill")} →</button></div> : <div className="bill-list">{bills.map((bill) => { const total = billTotal(bill); return <article className="bill-card" key={bill.id}><div><span className={`status-pill ${bill.status}`}>{bill.status === "closed" ? t("ปิดบิลแล้ว", "Closed") : t("ร่าง", "Draft")}</span><h2>{bill.title}</h2><p>{bill.session.participants.length} {t("คน", "people")} · {total === null ? t("กำลังกรอกข้อมูล", "In progress") : formatMoney(total, bill.currency)} · {t("แก้ไขล่าสุด", "updated")} {new Intl.DateTimeFormat(language === "en" ? "en-US" : "th-TH", { dateStyle: "medium" }).format(new Date(bill.updatedAt))}</p></div><div className="bill-actions"><Link href={`/bills/${bill.id}`} className="button button-secondary">{t("เปิดบิล", "Open")}</Link>{bill.status === "draft" && <button type="button" className="button button-secondary" onClick={() => close(bill.id)}>{t("ปิดบิล", "Close")}</button>}<button type="button" className="button button-danger" onClick={() => remove(bill.id)}>{t("ลบบิล", "Delete")}</button></div></article>; })}</div>}</section></main></AppShell>;
+}

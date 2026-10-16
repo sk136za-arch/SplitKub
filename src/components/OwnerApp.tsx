@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { emptySession, sessionReducer, type SessionAction } from "@/lib/billState";
@@ -27,6 +28,7 @@ import { uiText, type UiTextKey } from "@/lib/uiText";
 import { dateLocale } from "@/lib/language";
 import { domainErrorMessage } from "@/lib/domainErrorMessage";
 import { resolveManualCopyText, type ManualCopyFallback } from "@/lib/manualCopy";
+import { findLocalBill, saveLocalBill } from "@/lib/localBills";
 
 const OWNER_KEY = "splitkub:shared-owner:v1";
 const MAX_QR_BYTES = 5 * 1024 * 1024;
@@ -76,7 +78,7 @@ function PersonRow({ person, currency, disabled, onRename, onPromptPay, onRemove
   </li>;
 }
 
-export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: string; ownerToken: string }; joinedOwner?: SharedOpen }) {
+export function OwnerApp({ recovery, joinedOwner, localBillId }: { recovery?: { publicId: string; ownerToken: string }; joinedOwner?: SharedOpen; localBillId?: string }) {
   const { language } = useLanguage();
   const t = (value: UiTextKey) => uiText(language, value);
   const languageRef = useRef(language);
@@ -242,11 +244,12 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
     try {
       const storage = resolveStorageSafely(() => window.localStorage);
       if (recovery || joinedOwner) { latestRevision.current = -1; latestConfirmationRevision.current = -1; }
-      const saved = recovery || joinedOwner || !storage ? null : loadSessionSafely(() => storage!);
+      const saved = recovery || joinedOwner || !storage ? null : localBillId ? findLocalBill(storage, localBillId)?.session ?? null : loadSessionSafely(() => storage!);
       if (saved) {
         rawDispatch({ type: "restore", session: saved }); setStarted(true); latestRevision.current = saved.revision; latestConfirmationRevision.current = saved.confirmationRevision;
       }
       setTitleDraft(saved?.title ?? emptySession().title);
+      if (localBillId) setStarted(true);
       if (storage && !recovery && !joinedOwner) {
         setPendingLegacyPromptPay(readPendingLegacyPromptPay(storage));
       }
@@ -289,14 +292,16 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
       setReady(true);
     }
     return () => { cancelled = true; };
-  }, [recovery, joinedOwner]);
+  }, [recovery, joinedOwner, localBillId]);
   useEffect(() => {
     if (!ready || recovery || joinedOwner) return;
     try {
-      if (shouldPersistSession(started, session)) saveSession(window.localStorage, session, started);
+      if (localBillId && shouldPersistSession(started, session)) {
+        saveLocalBill(window.localStorage, localBillId, session);
+      } else if (shouldPersistSession(started, session)) saveSession(window.localStorage, session, started);
       else clearSessionStorage(window.localStorage);
     } catch { setActionMessage(uiText(languageRef.current, "ไม่สามารถบันทึกข้อมูลใน browser นี้ได้")); }
-  }, [ready, started, session, recovery, joinedOwner]);
+  }, [ready, started, session, recovery, joinedOwner, localBillId]);
   /* eslint-enable react-hooks/set-state-in-effect */
   /* eslint-disable react-hooks/set-state-in-effect -- Remote snapshots can update the title while this client editor is open. */
   useEffect(() => { setTitleDraft(session.title); }, [session.title]);
@@ -346,6 +351,7 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
   }
   function newBill() {
     if (recovery || joinedOwner) { clearQr(); router.push("/"); return; }
+    if (localBillId) { clearQr(); router.push("/bills"); return; }
     clearQr(); dismissToast(); rawDispatch({ type: "clear" }); setStarted(false); setOwner(null); setRemoteStatus("local");
     setPersonName(""); setReceiptTitle(""); setTitleDraft(emptySession().title); setFormError(""); setActionMessage(""); setManualCopyFallback(null);
     try { clearSessionStorage(window.localStorage); window.localStorage.removeItem(OWNER_KEY); } catch { /* Local storage may be blocked. */ }
@@ -514,13 +520,13 @@ export function OwnerApp({ recovery, joinedOwner }: { recovery?: { publicId: str
     !session.confirmations.some((status) => status.participantId === person.id && status.confirmedContentRevision === session.revision));
 
   return <main>
-    <header className="border-b border-[#e9e4f7] bg-white/80"><div className="shell flex min-h-18 items-center justify-between gap-3 py-4"><a href="#top" className="inline-flex min-h-11 items-center gap-2 text-xl font-black tracking-tight text-[#5331aa]"><Image src="/brand/splitkub-icon.png" width={44} height={44} alt="" className="h-11 w-11 shrink-0 object-contain" priority/>SplitKub</a><div className="flex flex-wrap items-center justify-end gap-2"><LanguageSwitcher/><span className="rounded-full bg-[#f1ecff] px-3 py-2 text-xs font-bold text-[#6040ac]">{t("ฟรี · ไม่ต้องสมัครสมาชิก")}</span></div></div></header>
+    <header className="border-b border-[#e9e4f7] bg-white/80"><div className="shell flex min-h-18 items-center justify-between gap-3 py-4"><Link href="/" className="inline-flex min-h-11 items-center gap-2 text-xl font-black tracking-tight text-[#5331aa]"><Image src="/brand/splitkub-icon.png" width={44} height={44} alt="" className="h-11 w-11 shrink-0 object-contain" priority/>SplitKub</Link><div className="flex flex-wrap items-center justify-end gap-2"><LanguageSwitcher/><span className="rounded-full bg-[#f1ecff] px-3 py-2 text-xs font-bold text-[#6040ac]">{t("ฟรี · ไม่ต้องสมัครสมาชิก")}</span></div></div></header>
     {migrationWarning && <div className="shell pt-4"><div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950"><p>{migrationWarning}</p>{pendingLegacyPromptPay && <div className="mt-3 flex flex-wrap items-end gap-2"><div className="min-w-52 flex-1"><label htmlFor="migration-promptpay-person" className="mb-1 block font-bold">{t("กำหนดเลขนี้ให้คนที่รับเงิน")}</label><select id="migration-promptpay-person" className="field" value={migrationParticipantId} onChange={(event) => setMigrationParticipantId(event.target.value)} disabled={pending}><option value="">{t("เลือกคน")}</option>{session.participants.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></div><button type="button" className="btn-primary" onClick={() => void assignLegacyPromptPay()} disabled={!migrationParticipantId || pending || Boolean(owner && remoteStatus !== "live")}>{t("กำหนดเลขให้คนนี้")}</button><button type="button" className="btn-secondary" onClick={discardLegacyPromptPay} disabled={pending}>{t("ทิ้งเลขเดิมนี้")}</button></div>}</div></div>}
     {!started ? <section id="top" className="shell flex min-h-[75vh] flex-col items-center justify-center py-12 text-center"><div className="mb-5 flex h-64 w-64 items-center justify-center rounded-[2rem] bg-white shadow-sm sm:h-72 sm:w-72"><Image src="/brand/splitkub-mascot.png" width={288} height={288} alt={t("มาสคอตพนักงาน SplitKub ยิ้มต้อนรับ")} className="h-full w-full object-contain" priority/></div><p className="eyebrow">{language === "en" ? "Split smarter, smile more" : "หารง่าย ยิ้มได้"}</p><h1 className="mt-4 max-w-2xl text-4xl leading-tight font-black tracking-tight sm:text-6xl">{t("หารหลายบิล")}<br/><span className="text-[#7350d1]">{t("จบในที่เดียว")}</span></h1><p className="muted mt-6 max-w-lg text-lg leading-8">{t("เพิ่มหลายใบเสร็จ ระบุคนออกเงิน ให้เพื่อนเลือกของที่ร่วมจ่าย แล้วดูยอดสุทธิได้ทันที")}</p><button className="btn-primary mt-9 px-8 text-lg" onClick={() => setStarted(true)}>{t("เริ่มหารบิล →")}</button><p className="muted mt-5 text-sm">{t("ไม่ต้องล็อกอิน · บันทึกฉบับร่างใน browser ของคุณ")}</p></section> : <div id="top" className="shell space-y-6 pb-20">
       <div className="flex flex-wrap items-center justify-between gap-4 py-8"><div><p className="eyebrow">{language === "en" ? "Your split session" : "บิลของคุณ"}</p><h1 className="mt-1 break-words text-3xl font-black tracking-tight">{session.title} ✨</h1><p className="muted mt-1 text-sm">{t("เพิ่มคน ใบเสร็จ และรายการ แล้วดูว่าใครจ่ายไปเท่าไร")}</p>{session.closedAt && <p role="status" className="mt-2 inline-block rounded-full bg-[#eee9fa] px-3 py-1 text-sm font-bold">{t("ปิดบิลแล้ว · อ่านได้อย่างเดียว")}</p>}</div><button className="btn-danger" onClick={newBill}>{t("เริ่มบิลใหม่")}</button></div>
       <nav aria-label={t("ขั้นตอนการหารบิล")} className="flex gap-2 overflow-x-auto pb-2 text-sm"><a className="chip whitespace-nowrap" href="#setup">{t("1 ตั้งค่าบิล")}</a><a className="chip whitespace-nowrap" href="#people">{t("2 คนร่วมบิล")}</a><a className="chip whitespace-nowrap" href="#receipts">{t("3 ใบเสร็จ")}</a><a className="chip whitespace-nowrap" href="#summary">{t("4 สรุปและแชร์")}</a></nav>
       <section id="setup" className="card scroll-mt-5 p-5 sm:p-7"><h2 className="section-title">{t("ตั้งค่าบิล")}</h2><form onSubmit={(event) => { event.preventDefault(); if (titleDraft.trim()) void commit({ type: "set-title", title: titleDraft.trim() }); else setFormError(t("กรุณาใส่ชื่อบิล")); }} className="mt-4 flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><label htmlFor="session-title" className="mb-1 block text-sm font-bold">{t("ชื่อบิล")}</label><input id="session-title" className="field" value={titleDraft} onChange={(event) => { setTitleDraft(event.target.value); setFormError(""); }} disabled={!canEdit}/></div><button type="submit" className="btn-secondary" disabled={!canEdit || titleDraft.trim() === session.title}>{t("บันทึกชื่อ")}</button></form><div className="mt-4"><label htmlFor="currency" className="mb-1 block text-sm font-bold">{t("สกุลเงิน")}</label><select id="currency" className="field max-w-48" value={session.currency} disabled={!canEdit || itemCount > 0} onChange={(event) => void commit({ type: "currency", currency: event.target.value as Currency })}><option value="THB">{t("THB · บาท")}</option><option value="USD">{t("USD · ดอลลาร์")}</option></select>{itemCount > 0 && <p className="muted mt-1 text-xs">{t("ลบรายการทั้งหมดก่อนเปลี่ยนสกุลเงิน")}</p>}</div></section>
-      <SettlementSettings session={session} disabled={!canEdit} onChange={(action) => { void commit(action); }}/>
+      <details className="card mt-5 p-5 sm:p-7"><summary className="min-h-11 cursor-pointer font-bold text-[#5140c6]">{language === "en" ? "More options" : "ตัวเลือกเพิ่มเติม"}</summary><p className="muted mt-2 text-sm">{language === "en" ? "Set a collector and transfer routing only when needed." : "ตั้งค่าคนรวบรวมเงินและรูปแบบเส้นทางโอนได้เมื่อจำเป็น"}</p><div className="mt-4"><SettlementSettings session={session} disabled={!canEdit} onChange={(action) => { void commit(action); }}/></div></details>
       <section id="people" className="card scroll-mt-5 p-5 sm:p-7"><h2 className="section-title">{t("คนร่วมบิล")}</h2><p className="muted mt-1 text-sm">{t("ระบุทุกคนที่จ่ายหรือร่วมรายการ เลข PromptPay จะใช้กับผู้รับเงินจริงตามเส้นทางโอน")}</p><form onSubmit={(event) => { event.preventDefault(); if (!personName.trim()) { setFormError(t("กรุณาใส่ชื่อคน")); return; } void commit({ type: "add-person", id: createClientId(), name: personName.trim() }).then((ok) => { if (ok) setPersonName(""); }); }} className="mt-4 flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><label htmlFor="new-person" className="mb-1 block text-sm font-bold">{t("เพิ่มคน")}</label><input id="new-person" className="field" value={personName} onChange={(event) => { setPersonName(event.target.value); setFormError(""); }} placeholder={t("เช่น Boss")} disabled={!canEdit}/></div><button className="btn-primary" disabled={!canEdit}>{t("+ เพิ่มคน")}</button></form>{formError && <p role="alert" className="error mt-2">{formError}</p>}{session.participants.length === 0 ? <p className="muted mt-5 rounded-xl bg-[#f8f6fd] p-4 text-sm">{t("ยังไม่มีคนร่วมบิล")}</p> : <ul className="mt-5 grid gap-3 md:grid-cols-2">{session.participants.map((person) => <PersonRow key={`${person.id}:${person.name}:${person.promptPay}`} person={person} currency={session.currency} disabled={!canEdit} onRename={(name) => commit({ type: "edit-person", id: person.id, name })} onPromptPay={(value) => commit({ type: "set-person-promptpay", id: person.id, value })} onRemove={() => void commit({ type: "remove-person", id: person.id })}/>)}</ul>}</section>
       <section id="receipts" className="scroll-mt-5 space-y-5">
         <div className="card p-5 sm:p-7"><h2 className="section-title">{t("ใบเสร็จ")}</h2><p className="muted mt-1 text-sm">{t("แต่ละใบเลือกคนจ่ายก่อน แล้วเพิ่มรายการและผู้ร่วมจ่าย")}</p><form onSubmit={(event) => { event.preventDefault(); if (!receiptTitle.trim()) { setFormError(t("กรุณาใส่ชื่อใบเสร็จ")); return; } void commit({ type: "add-receipt", id: createClientId(), title: receiptTitle.trim() }).then((ok) => { if (ok) setReceiptTitle(""); }); }} className="mt-4 flex flex-wrap items-end gap-2"><div className="min-w-48 flex-1"><label htmlFor="new-receipt" className="mb-1 block text-sm font-bold">{t("ชื่อใบเสร็จใหม่")}</label><input id="new-receipt" className="field" value={receiptTitle} onChange={(event) => { setReceiptTitle(event.target.value); setFormError(""); }} placeholder={t("เช่น ร้านอาหาร")} disabled={!canEdit}/></div><button className="btn-primary" disabled={!canEdit}>{t("+ เพิ่มใบเสร็จ")}</button></form>{session.receipts.length === 0 && <p className="muted mt-5 rounded-xl bg-[#f8f6fd] p-4 text-sm">{t("ยังไม่มีใบเสร็จ")}</p>}</div>
