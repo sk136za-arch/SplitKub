@@ -11,29 +11,44 @@ import type { SplitSession } from "@/types/bill";
 
 function transferKey(from: string, to: string, amount: number, index: number) { return `${from}:${to}:${amount}:${index}`; }
 
-export function PaymentTracking({ billId, session, selectedParticipantId, owner, allowOwnerActor = false, lockParticipantIdentity = false, onSession }: { billId: string; session: SplitSession; selectedParticipantId: string; owner: boolean; allowOwnerActor?: boolean; lockParticipantIdentity?: boolean; onSession: (next: SplitSession) => void }) {
+interface PaymentTrackingProps { billId: string; session: SplitSession; selectedParticipantId: string; owner: boolean; allowOwnerActor?: boolean; lockParticipantIdentity?: boolean; onSession: (next: SplitSession) => void }
+
+export function PaymentTracking(props: PaymentTrackingProps) {
+  // Identity changes start a fresh selection, including pending request state.
+  return <PaymentTrackingContent key={JSON.stringify([props.billId, props.selectedParticipantId, props.owner, props.allowOwnerActor, props.lockParticipantIdentity])} {...props}/>;
+}
+
+function PaymentTrackingContent({ billId, session, selectedParticipantId, owner, allowOwnerActor = false, lockParticipantIdentity = false, onSession }: PaymentTrackingProps) {
   const canActAsParticipant = !owner || allowOwnerActor;
-  const [actor, setActor] = useState(selectedParticipantId); const [actorReady, setActorReady] = useState(owner && !allowOwnerActor); const [busy, setBusy] = useState(false); const [message, setMessage] = useState("");
+  const [actor, setActor] = useState(selectedParticipantId);
+  const [selection, setSelection] = useState<{ actor: string; ready: boolean; error: string } | null>(null);
+  const [actionBusy, setBusy] = useState(false); const [actionMessage, setMessage] = useState("");
+  const message = actionMessage || selection?.error || "";
+  const actorReady = !canActAsParticipant || Boolean(actor && selection?.actor === actor && selection.ready);
+  const selecting = canActAsParticipant && Boolean(actor) && selection?.actor !== actor;
+  const busy = actionBusy || selecting;
+  const onSessionRef = useRef(onSession);
+  useEffect(() => { onSessionRef.current = onSession; }, [onSession]);
   const [proofs, setProofs] = useState<Record<string, LocalPaymentProof>>({});
   const fileRef = useRef<HTMLInputElement>(null); const pendingTransfer = useRef("");
   const labels = participantLabels(session.participants);
   const transfers = (() => { try { return summaryTransferRows(session, calculateBill(session)); } catch { return []; } })();
-  useEffect(() => { setActor(selectedParticipantId); }, [selectedParticipantId]);
+  const closed = Boolean(session.closedAt);
   useEffect(() => {
-    if (owner && !allowOwnerActor) { setActorReady(true); return; }
-    if (!actor) { setActorReady(false); return; }
+    if (!canActAsParticipant || !actor || !closed) return;
     let active = true;
-    setActorReady(false); setBusy(true); setMessage("");
     void selectSharedPaymentActor(billId, actor).then((next) => {
       if (!active) return;
-      onSession(next); setActorReady(true);
-    }, () => { if (active) setMessage("เลือกชื่อสำหรับติดตามการจ่ายไม่สำเร็จ"); })
-      .finally(() => { if (active) setBusy(false); });
+      onSessionRef.current(next);
+      setSelection({ actor, ready: true, error: "" });
+    }, () => {
+      if (active) setSelection({ actor, ready: false, error: "เลือกชื่อสำหรับติดตามการจ่ายไม่สำเร็จ" });
+    });
     return () => { active = false; };
-  }, [actor, allowOwnerActor, billId, onSession, owner]);
+  }, [actor, billId, canActAsParticipant, closed]);
   if (!session.closedAt) return null;
   async function initialize() { setBusy(true); setMessage(""); try { onSession(await startPaymentTracking(billId, transfers.map((row, index) => ({ key: transferKey(row.fromParticipantId, row.toParticipantId, row.amount, index), fromParticipantId: row.fromParticipantId, toParticipantId: row.toParticipantId, amount: row.amount })))); } catch { setMessage("เริ่มติดตามการจ่ายไม่สำเร็จ"); } finally { setBusy(false); } }
-  function choose(next: string) { if (lockParticipantIdentity) return; setMessage(""); setActor(next); }
+  function choose(next: string) { if (lockParticipantIdentity) return; setMessage(""); setSelection(null); setActor(next); }
   async function submit(key: string, kind: "bank_transfer" | "cash") { setBusy(true); setMessage(""); try { onSession(await submitSharedPayment(billId, key, kind)); } catch { setMessage("บันทึกสถานะการจ่ายไม่สำเร็จ"); } finally { setBusy(false); } }
   async function uploadSlip(event: React.ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; const key = pendingTransfer.current; event.target.value = ""; if (!file || !key) return; setBusy(true); setMessage(""); try { const proof = await readLocalImage(file); savePaymentProof(window.localStorage, billId, key, proof); setProofs((current) => ({ ...current, [key]: proof })); await submit(key, "bank_transfer"); } catch (caught) { setMessage(caught instanceof Error ? caught.message : "บันทึกสลิปไม่สำเร็จ"); } finally { setBusy(false); } }
   async function confirm(key: string) { setBusy(true); setMessage(""); try { onSession(await confirmSharedPayment(billId, key)); } catch { setMessage("ยืนยันการรับเงินไม่สำเร็จ"); } finally { setBusy(false); } }

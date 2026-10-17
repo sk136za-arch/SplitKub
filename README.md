@@ -19,6 +19,16 @@ npm run test
 npm run build
 ```
 
+## Browser regression tests
+
+```bash
+npx playwright install chromium
+npm run typecheck
+npm run test:e2e
+```
+
+E2E builds a production app with shared bills disabled, then starts it on `127.0.0.1:3100`. It never reuses an existing server. Browser requests to non-local hosts are blocked. Do not run a development server or another build in this checkout at the same time because both use `.next`. Desktop/mobile tests cover local bill editing, copying the payment summary, persistence, permanent local close, and group synchronization between tabs. Online sharing requires separate local Supabase integration tests; this suite does not contact production.
+
 ## MVP behavior
 
 - เลือก THB หรือ USD ก่อนเพิ่มรายการ; หนึ่งบิลใช้หนึ่งสกุลเงิน
@@ -38,7 +48,7 @@ npm run build
 Shared bills use Supabase anonymous auth (no email or password), Postgres RPCs and private Realtime broadcasts. Each shared session is retained for a fixed 90 days. Owner/friend capabilities are random 256-bit tokens; only SHA-256 hashes are stored in Postgres. Receipt contents and participant links are normalized in private tables. The frontend only receives a publishable key; never expose a secret/service-role key.
 
 1. Create a Supabase project and apply migrations in order: `202610030001_shared_bills.sql`, `202610030002_settlement_routing.sql`, `202610030003_shared_bill_capabilities.sql`, `202610030004_unlocked_participant_selection.sql`, `202610040001_selection_bound_friend_participation.sql`, `202610040002_receipt_adjustments.sql`, `202610040003_close_bill_reviews.sql`, `202610170001_payment_tracking.sql`, and `202610170002_owner_payment_actor.sql` from `supabase/migrations/` (or link the Supabase CLI project and run `supabase db push`). The first migration requires `pgcrypto` and `pg_cron`. The final additive migrations add participant review confirmations, permanent close, and per-transfer payment tracking (`paymentTrackingVersion=1`).
-2. In Supabase Auth, enable anonymous sign-ins. In API settings, expose the `api` schema to PostgREST (the local CLI configuration already does this).
+2. Also apply `202610170003_restore_friend_identity.sql`, which returns the participant identity required by the current client when rejoining a bill. In Supabase Auth, enable anonymous sign-ins. In API settings, expose the `api` schema to PostgREST (the local CLI configuration already does this).
 3. Configure Realtime to reject public channels. This integration subscribes only to private `shared-bill:<internal-id>` channels and the migration permits SELECT/receive only for joined bill members.
 4. Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_SHARED_BILLS_ENABLED=true`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. The key may be the modern publishable key or the legacy `anon` JWT, never `service_role`/secret. Restart Next.js after changing environment variables.
 5. Keep the SQL migration and security test in source control. Check scheduled cleanup under Supabase Cron after deployment.

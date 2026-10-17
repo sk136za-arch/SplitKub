@@ -39,10 +39,16 @@ beforeEach(() => {
 
 describe("shared backend routing compatibility", () => {
   it("keeps the authenticated RPC role when opening a friend-token URL", async () => {
-    mocks.rpc.mockResolvedValue({ data: { publicId: "public", billId: "bill", role: "owner", snapshot: oldSnapshot() }, error: null });
+    mocks.rpc.mockResolvedValue({ data: { publicId: "public", billId: "bill", role: "owner", participantId: "", snapshot: oldSnapshot() }, error: null });
     const opened = await joinSharedBill("public", "f".repeat(43));
     expect(opened.role).toBe("owner");
+    expect(opened.participantId).toBe("");
     expect(opened.snapshot.settlementMode).toBe("direct");
+  });
+
+  it("rejects a join response missing the participant identity contract", async () => {
+    mocks.rpc.mockResolvedValue({ data: { publicId: "public", billId: "bill", role: "friend", snapshot: oldSnapshot() }, error: null });
+    await expect(joinSharedBill("public", "f".repeat(43))).rejects.toMatchObject({ code: "unknown" });
   });
 
   it("maps a missing capability RPC to a migration-required error", () => {
