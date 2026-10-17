@@ -1,10 +1,11 @@
 import {
-  applyOwnerAction, closeSharedBill, setParticipantConfirmation, selectParticipant, createSharedBill, fetchSharedBill, fetchSharedBillForParticipant, joinSharedBill,
+  applyOwnerAction, closeSharedBill, setParticipantConfirmation, selectParticipant, createSharedBill, fetchSharedBill, fetchSharedBillForParticipant, joinSharedBill, initializePaymentTracking, selectPaymentActor, submitPayment, confirmPayment,
   parseSharedBillFragment, setSharedParticipation, sharedBillAvailable, subscribeToSharedBill,
   type SharedBillCreateResponse, type SharedBillJoinResponse,
 } from "@/lib/supabase/sharedBill";
 import type { SessionAction } from "@/lib/billState";
 import type { SplitSession } from "@/types/bill";
+import type { PaymentProofKind, PaymentTransfer } from "@/types/bill";
 export { sharedErrorMessage } from "@/lib/sharedErrorMessage";
 
 export type SharedOpen = SharedBillJoinResponse;
@@ -32,6 +33,10 @@ export function confirmSharedParticipant(billId: string, participantId: string, 
 export function closeSharedSession(billId: string, revision: number, acknowledgeIncomplete: boolean): Promise<SplitSession> {
   return closeSharedBill(billId, revision, acknowledgeIncomplete);
 }
+export function startPaymentTracking(billId: string, transfers: Pick<PaymentTransfer, "key" | "fromParticipantId" | "toParticipantId" | "amount">[]): Promise<SplitSession> { return initializePaymentTracking(billId, transfers); }
+export function selectSharedPaymentActor(billId: string, participantId: string): Promise<SplitSession> { return selectPaymentActor(billId, participantId); }
+export function submitSharedPayment(billId: string, key: string, proofKind: Exclude<PaymentProofKind, "">): Promise<SplitSession> { return submitPayment(billId, key, proofKind); }
+export function confirmSharedPayment(billId: string, key: string): Promise<SplitSession> { return confirmPayment(billId, key); }
 export function subscribeSharedBill(billId: string, onChange: () => void, onError?: (error: unknown) => void, onStatus?: (status: string) => void): Promise<() => Promise<void>> {
   return subscribeToSharedBill(billId, onChange, onError, onStatus);
 }

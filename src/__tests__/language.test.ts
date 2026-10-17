@@ -68,7 +68,7 @@ describe("language preference and presentation", () => {
   it("localizes every shared-bill error code without exposing server messages", () => {
     const codes = ["disabled", "not_configured", "auth_required", "invalid_token", "unavailable", "revision_conflict",
       "participant_not_claimed", "owner_cannot_claim", "item_not_in_receipt", "validation", "migration_required",
-      "realtime_unavailable", "bill_closed", "confirmations_incomplete", "rate_limited", "network", "unknown"] satisfies SharedBillErrorCode[];
+      "realtime_unavailable", "bill_closed", "confirmations_incomplete", "payment_actor_required", "payment_not_submitted", "rate_limited", "network", "unknown"] satisfies SharedBillErrorCode[];
     expect(Object.keys(SHARED_ERROR_MESSAGES).sort()).toEqual([...codes].sort());
     for (const code of codes) {
       const english = sharedErrorMessage({ code, message: "SERVER_ONLY_MESSAGE" }, "en");

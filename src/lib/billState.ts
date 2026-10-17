@@ -37,7 +37,7 @@ export function billReducer(bill: Bill, action: BillAction): Bill {
 export const emptySession = (): SplitSession => ({
   id: "", title: "บิลของเรา", currency: "THB", revision: 0, expiresAt: "",
   closedAt: "", confirmationRevision: 0, confirmations: [],
-  settlementMode: "direct", collectorParticipantId: "", participants: [], receipts: [],
+  settlementMode: "direct", collectorParticipantId: "", participants: [], receipts: [], payments: [],
 });
 
 export type SessionAction =

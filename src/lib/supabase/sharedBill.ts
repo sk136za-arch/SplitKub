@@ -1,5 +1,5 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import type { ReceiptAdjustments, SplitSession } from "../../types/bill";
+import type { PaymentProofKind, PaymentTransfer, ReceiptAdjustments, SplitSession } from "../../types/bill";
 import { sessionReducer, type SessionAction } from "../billState";
 import { isSplitSession } from "../storage";
 import { normalizeRemoteSessionSnapshot } from "../sharedSnapshot";
@@ -19,12 +19,14 @@ export interface SharedBillCreateResponse extends SharedBillSnapshot {
 
 export interface SharedBillJoinResponse extends SharedBillSnapshot {
   role: "owner" | "friend";
+  /** The participant previously selected by this friend session, if any. */
+  participantId: string;
 }
 
 export type SharedBillErrorCode =
   | "disabled" | "not_configured" | "auth_required" | "invalid_token" | "unavailable"
   | "revision_conflict" | "participant_not_claimed" | "owner_cannot_claim"
-  | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "bill_closed" | "confirmations_incomplete" | "rate_limited" | "network" | "unknown";
+  | "item_not_in_receipt" | "validation" | "migration_required" | "realtime_unavailable" | "bill_closed" | "confirmations_incomplete" | "payment_actor_required" | "payment_not_submitted" | "rate_limited" | "network" | "unknown";
 
 export class SharedBillError extends Error {
   constructor(readonly code: SharedBillErrorCode, message: string) {
@@ -51,6 +53,8 @@ export function mapSharedBillError(error: unknown): SharedBillError {
   if (matched("REVISION_CONFLICT") || code === "40001") return new SharedBillError("revision_conflict", "This bill changed elsewhere. Refresh it and try again.");
   if (matched("BILL_CLOSED")) return new SharedBillError("bill_closed", "This bill is closed and read-only.");
   if (matched("CONFIRMATIONS_INCOMPLETE")) return new SharedBillError("confirmations_incomplete", "Some participants have not confirmed the latest bill.");
+  if (matched("PAYMENT_ACTOR_REQUIRED")) return new SharedBillError("payment_actor_required", "Select your participant identity before updating payment status.");
+  if (matched("PAYMENT_NOT_SUBMITTED")) return new SharedBillError("payment_not_submitted", "This payment has not been submitted yet.");
   if (matched("INVALID_TOKEN")) return new SharedBillError("invalid_token", "This share link is invalid.");
   if (matched("SHARED_BILL_UNAVAILABLE") || matched("PARTICIPANT_NOT_FOUND")) return new SharedBillError("unavailable", "This shared bill is unavailable or has expired.");
   if (matched("PARTICIPANT_ALREADY_CLAIMED")) return new SharedBillError("migration_required", "Apply the latest shared-bill migration to allow multiple friends to select the same name.");
@@ -186,6 +190,23 @@ export async function closeSharedBill(billId: string, expectedContentRevision: n
     p_bill_id: billId, p_expected_content_revision: expectedContentRevision,
     p_ack_incomplete: acknowledgeIncomplete,
   }));
+}
+
+export async function initializePaymentTracking(billId: string, transfers: Pick<PaymentTransfer, "key" | "fromParticipantId" | "toParticipantId" | "amount">[]): Promise<SplitSession> {
+  const client = getClient(); await ensureAnonymousSession(client); await ensurePaymentTrackingSupported(client);
+  return assertRemoteSession(await callRpc(client, "initialize_payment_tracking", { p_bill_id: billId, p_transfers: transfers }));
+}
+export async function selectPaymentActor(billId: string, participantId: string): Promise<SplitSession> {
+  const client = getClient(); await ensureAnonymousSession(client); await ensurePaymentTrackingSupported(client);
+  return assertRemoteSession(await callRpc(client, "select_payment_actor", { p_bill_id: billId, p_participant_id: participantId }));
+}
+export async function submitPayment(billId: string, transferKey: string, proofKind: Exclude<PaymentProofKind, "">): Promise<SplitSession> {
+  const client = getClient(); await ensureAnonymousSession(client); await ensurePaymentTrackingSupported(client);
+  return assertRemoteSession(await callRpc(client, "submit_payment", { p_bill_id: billId, p_transfer_key: transferKey, p_proof_kind: proofKind }));
+}
+export async function confirmPayment(billId: string, transferKey: string): Promise<SplitSession> {
+  const client = getClient(); await ensureAnonymousSession(client); await ensurePaymentTrackingSupported(client);
+  return assertRemoteSession(await callRpc(client, "confirm_payment", { p_bill_id: billId, p_transfer_key: transferKey }));
 }
 
 export function buildSharedBillUrl(
@@ -338,6 +359,11 @@ async function ensureCloseBillSupported(client: ReturnType<typeof getSharedBillC
   }
 }
 
+async function ensurePaymentTrackingSupported(client: ReturnType<typeof getSharedBillClient>): Promise<void> {
+  const capabilities = await callRpc(client, "shared_bill_capabilities", {});
+  if (!isRecord(capabilities) || capabilities.paymentTrackingVersion !== 1) throw new SharedBillError("migration_required", "Apply the payment tracking database migration before using payment status.");
+}
+
 function assertAdjustmentsPreserved(requested: SplitSession, saved: SplitSession): void {
   const fields: (keyof ReceiptAdjustments)[] = ["vatEnabled", "vatRateBps", "serviceChargeEnabled", "serviceChargeRateBps", "preDiscountEnabled", "preDiscount", "postDiscountEnabled", "postDiscount"];
   for (const receipt of requested.receipts) {
@@ -364,8 +390,8 @@ function assertCreated(value: unknown): SharedBillCreateResponse {
 
 function assertJoined(value: unknown): SharedBillJoinResponse {
   if (!isRecord(value) || typeof value.publicId !== "string" || typeof value.billId !== "string" ||
-      (value.role !== "owner" && value.role !== "friend")) throw invalidResponse();
-  return { publicId: value.publicId, billId: value.billId, role: value.role, snapshot: assertRemoteSession(value.snapshot) };
+      (value.role !== "owner" && value.role !== "friend") || typeof value.participantId !== "string") throw invalidResponse();
+  return { publicId: value.publicId, billId: value.billId, role: value.role, participantId: value.participantId, snapshot: assertRemoteSession(value.snapshot) };
 }
 
 function assertSnapshotEnvelope(value: unknown): SharedBillSnapshot {

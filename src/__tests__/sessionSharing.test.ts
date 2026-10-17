@@ -6,7 +6,7 @@ import { createSessionSummaryImage, sessionSummaryImageCacheKey, sessionSummaryI
 import { defaultReceiptAdjustments } from "../lib/receiptAdjustments";
 
 const session: SplitSession = {
-  id: "bill", title: "วันเกิด", currency: "THB", revision: 2, expiresAt: "", closedAt: "", confirmationRevision: 0, confirmations: [], settlementMode: "direct", collectorParticipantId: "",
+  id: "bill", title: "วันเกิด", currency: "THB", revision: 2, expiresAt: "", closedAt: "", confirmationRevision: 0, confirmations: [], payments: [], settlementMode: "direct", collectorParticipantId: "",
   participants: [
     { id: "a", name: "Boss", promptPay: "089-123-4567" },
     { id: "b", name: "Boss", promptPay: "" },

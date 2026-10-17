@@ -7,6 +7,7 @@ export const LOCAL_BILLS_KEY = "splitkub:local-bills:v1";
 const LOCAL_BILLS_VERSION = 1;
 
 export type LocalBillStatus = "draft" | "closed";
+export interface LocalSharedLinks { publicId: string; billId: string; friendToken: string; ownerToken: string }
 
 export interface LocalBillRecord {
   id: string;
@@ -16,6 +17,7 @@ export interface LocalBillRecord {
   createdAt: string;
   updatedAt: string;
   session: SplitSession;
+  shared?: LocalSharedLinks;
 }
 
 interface LocalBillEnvelope { version: number; bills: LocalBillRecord[] }
@@ -28,7 +30,9 @@ function isRecord(value: unknown): value is LocalBillRecord {
     (record.currency === "THB" || record.currency === "USD") &&
     (record.status === "draft" || record.status === "closed") &&
     typeof record.createdAt === "string" && typeof record.updatedAt === "string" &&
-    isSplitSession(record.session);
+    isSplitSession(record.session) && (record.shared === undefined || (typeof record.shared === "object" && record.shared !== null &&
+      typeof (record.shared as LocalSharedLinks).publicId === "string" && typeof (record.shared as LocalSharedLinks).billId === "string" &&
+      typeof (record.shared as LocalSharedLinks).friendToken === "string" && typeof (record.shared as LocalSharedLinks).ownerToken === "string"));
 }
 
 function ordered(bills: LocalBillRecord[]): LocalBillRecord[] {
@@ -79,6 +83,14 @@ export function saveLocalBill(storage: Pick<Storage, "getItem" | "setItem">, id:
     ...previous, title: session.title, currency: session.currency, status: session.closedAt ? "closed" : "draft",
     updatedAt: new Date().toISOString(), session,
   };
+  saveLocalBills(storage, bills.map((bill) => bill.id === id ? next : bill));
+  return next;
+}
+
+export function saveLocalBillShare(storage: Pick<Storage, "getItem" | "setItem">, id: string, shared: LocalSharedLinks, session: SplitSession): LocalBillRecord | null {
+  const bills = loadLocalBills(storage); const previous = bills.find((bill) => bill.id === id);
+  if (!previous) return null;
+  const next: LocalBillRecord = { ...previous, title: session.title, currency: session.currency, status: session.closedAt ? "closed" : "draft", updatedAt: new Date().toISOString(), session, shared };
   saveLocalBills(storage, bills.map((bill) => bill.id === id ? next : bill));
   return next;
 }

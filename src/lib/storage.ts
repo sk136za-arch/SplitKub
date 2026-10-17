@@ -150,7 +150,7 @@ export function loadSessionSafely(getStorage: () => Pick<Storage, "getItem" | "s
 export function migrateLegacyBill(bill: Bill): SplitSession {
   return {
     id: "", title: "บิลของเรา", currency: bill.currency, revision: 0, expiresAt: "",
-    closedAt: "", confirmationRevision: 0, confirmations: [],
+    closedAt: "", confirmationRevision: 0, confirmations: [], payments: [],
     settlementMode: "direct", collectorParticipantId: "",
     participants: bill.participants.map((person) => ({ ...person, promptPay: "" })),
     receipts: [{ id: "legacy-receipt-1", title: "ใบเสร็จที่ 1", paidByParticipantId: "", adjustments: defaultReceiptAdjustments(), items: bill.items.map((item) => ({ ...item, participantIds: [...item.participantIds] })) }],
@@ -172,10 +172,11 @@ export function migrateV3Session(value: unknown): SplitSession | null {
 export function migrateV4Session(value: unknown): SplitSession | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  const keys = ["closedAt", "confirmationRevision", "confirmations"];
-  const migrated = keys.every((key) => !(key in candidate))
-    ? { ...candidate, closedAt: "", confirmationRevision: 0, confirmations: [] }
-    : candidate;
+  const reviewKeys = ["closedAt", "confirmationRevision", "confirmations"];
+  const missingReview = reviewKeys.every((key) => !(key in candidate));
+  const migrated = missingReview
+    ? { ...candidate, closedAt: "", confirmationRevision: 0, confirmations: [], ...("payments" in candidate ? {} : { payments: [] }) }
+    : "payments" in candidate ? candidate : { ...candidate, payments: [] };
   return isSession(migrated) ? migrated : null;
 }
 
@@ -293,7 +294,7 @@ function isSession(value: unknown): value is SplitSession {
     typeof session.expiresAt !== "string" ||
     typeof session.closedAt !== "string" ||
     !Number.isSafeInteger(session.confirmationRevision) || (session.confirmationRevision as number) < 0 ||
-    !Array.isArray(session.confirmations) ||
+    !Array.isArray(session.confirmations) || !Array.isArray(session.payments) ||
     !Array.isArray(session.participants) || !Array.isArray(session.receipts)) return false;
 
   const participantIds = new Set<string>();
@@ -314,6 +315,19 @@ function isSession(value: unknown): value is SplitSession {
       typeof status.viewedAt !== "string" || typeof status.confirmedAt !== "string" ||
       (status.confirmedContentRevision !== null && (!Number.isSafeInteger(status.confirmedContentRevision) || (status.confirmedContentRevision as number) < 0))) return false;
     confirmationIds.add(status.participantId);
+  }
+  const paymentKeys = new Set<string>();
+  for (const value of session.payments as unknown[]) {
+    if (!value || typeof value !== "object") return false;
+    const payment = value as Record<string, unknown>;
+    if (typeof payment.key !== "string" || !payment.key || paymentKeys.has(payment.key) ||
+      typeof payment.fromParticipantId !== "string" || !participantIds.has(payment.fromParticipantId) ||
+      typeof payment.toParticipantId !== "string" || !participantIds.has(payment.toParticipantId) ||
+      !Number.isSafeInteger(payment.amount) || (payment.amount as number) <= 0 ||
+      (payment.status !== "pending" && payment.status !== "submitted" && payment.status !== "confirmed") ||
+      (payment.proofKind !== "" && payment.proofKind !== "bank_transfer" && payment.proofKind !== "cash") ||
+      typeof payment.submittedAt !== "string" || typeof payment.confirmedAt !== "string") return false;
+    paymentKeys.add(payment.key);
   }
   const receiptIds = new Set<string>();
   for (const value of session.receipts as unknown[]) {

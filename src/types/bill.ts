@@ -37,6 +37,18 @@ export interface ParticipantConfirmation {
   confirmedAt: string;
   confirmedContentRevision: number | null;
 }
+export type PaymentStatus = "pending" | "submitted" | "confirmed";
+export type PaymentProofKind = "bank_transfer" | "cash" | "";
+export interface PaymentTransfer {
+  key: string;
+  fromParticipantId: string;
+  toParticipantId: string;
+  amount: Money;
+  status: PaymentStatus;
+  proofKind: PaymentProofKind;
+  submittedAt: string;
+  confirmedAt: string;
+}
 export interface SplitSession {
   id: string;
   title: string;
@@ -49,6 +61,8 @@ export interface SplitSession {
   confirmationRevision: number;
   /** Owner sees every status; a friend receives only their selected identity. */
   confirmations: ParticipantConfirmation[];
+  /** Immutable transfer tracking records are created only once a shared bill is closed. */
+  payments: PaymentTransfer[];
   settlementMode: SettlementMode;
   /** Empty unless a valid participant is selected in collector mode. */
   collectorParticipantId: string;

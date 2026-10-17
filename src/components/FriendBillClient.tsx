@@ -13,9 +13,11 @@ import type { SplitSession } from "@/types/bill";
 import { confirmSharedParticipant, selectSharedParticipant, openSharedBill, parseShareFragment, refreshSharedBill, sharedErrorMessage, sharingIsAvailable, subscribeSharedBill, toggleSharedParticipation, type SharedOpen } from "@/hooks/sharedBillAdapter";
 import { SessionSummary } from "./SessionSummary";
 import { OwnerApp } from "./OwnerApp";
+import { PaymentTracking } from "./PaymentTracking";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useLanguage } from "./LanguageProvider";
 import { uiText, type UiTextKey } from "@/lib/uiText";
+import { SuccessToast, type ToastMessage } from "./SuccessToast";
 
 type ViewStatus = "loading" | "ready" | "error";
 type SyncStatus = "live" | "connecting" | "offline" | "stale";
@@ -34,6 +36,8 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("connecting");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const toastId = useRef(0);
   const [snapshot, setSnapshot] = useState<SplitSession | null>(null);
   const [billId, setBillId] = useState("");
   const [selectedPersonId, setSelectedPersonId] = useState("");
@@ -177,7 +181,13 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       setSnapshot(opened.snapshot);
       setViewStatus("ready");
       setSyncStatus(navigator.onLine ? "connecting" : "offline");
-      const remembered = readFriendSelection(selectionStorage(), publicId, opened.snapshot.participants);
+      // The membership identity is the source of truth after a friend confirms.
+      // Browser storage remains only as a pre-confirmation fallback.
+      const serverSelection = opened.snapshot.participants.some((person) => person.id === opened.participantId)
+        ? opened.participantId
+        : "";
+      const remembered = serverSelection || readFriendSelection(selectionStorage(), publicId, opened.snapshot.participants);
+      if (serverSelection) rememberFriendSelection(selectionStorage(), publicId, serverSelection);
       if (remembered && opened.snapshot.closedAt) {
         selectedPersonIdRef.current = remembered;
         setSelectedPersonId(remembered);
@@ -322,6 +332,7 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
       if (shouldApplyRemoteSnapshot({ revision: revisionSeen.current, confirmationRevision: confirmationRevisionSeen.current }, next)) {
         revisionSeen.current = next.revision; confirmationRevisionSeen.current = next.confirmationRevision; setSnapshot(next);
       }
+      if (confirmed) { toastId.current += 1; setToast({ id: toastId.current, text: t("ยืนยันยอดสำเร็จแล้ว") }); }
     } catch (caught) { if (generation === openGeneration.current) { await reload(billId); setError(sharedErrorMessage(caught, language)); } }
     finally { if (generation === openGeneration.current) setPending(false); }
   }
@@ -330,18 +341,21 @@ export function FriendBillClient({ publicId }: { publicId: string }) {
   if (joinedOwner) return <OwnerApp joinedOwner={joinedOwner}/>;
 
   return <main className="min-h-screen">
+    <SuccessToast toast={toast} onDismiss={() => setToast(null)}/>
     <header className="border-b border-[#e9e4f7] bg-white/80"><div className="shell flex min-h-18 items-center justify-between gap-3 py-4"><Link href="/" className="inline-flex min-h-11 items-center gap-2 text-xl font-black text-[#5331aa]"><Image src="/brand/splitkub-icon.png" width={44} height={44} alt="" className="h-11 w-11"/>SplitKub</Link><div className="flex flex-wrap items-center justify-end gap-2"><LanguageSwitcher/><span className="rounded-full bg-[#f1ecff] px-3 py-2 text-xs font-bold text-[#6040ac]">{t("บิลที่เพื่อนแชร์")}</span></div></div></header>
     <div className="shell space-y-6 py-8">
       {viewStatus === "loading" && <div role="status" className="card p-6">{t("กำลังเปิดบิลที่แชร์…")}</div>}
       {viewStatus === "error" && <div role="alert" className="card p-6"><h1 className="section-title">{t("เปิดบิลไม่ได้")}</h1><p className="error mt-3">{error}</p><button className="btn-secondary mt-4" onClick={() => window.location.reload()}>{t("ลองเปิดใหม่")}</button></div>}
       {viewStatus === "ready" && snapshot && <>
-        <div className="card p-5 sm:p-7"><p className="eyebrow">{language === "en" ? "Shared bill" : "บิลที่แชร์"}</p><h1 className="mt-2 break-words text-3xl font-black">{snapshot.title}</h1><p className="muted mt-2 text-sm">{snapshot.closedAt ? t("บิลปิดแล้ว ดูสรุปได้อย่างเดียว") : t("เลือกชื่อของคุณ แล้วเลือกเฉพาะรายการที่ร่วมจ่าย")}</p>{snapshot.closedAt && <p role="status" className="mt-2 rounded-full bg-[#eee9fa] px-3 py-1 text-sm font-bold">{t("ปิดบิลแล้ว")}</p>}<p role="status" aria-live="polite" className={`mt-3 text-sm ${syncStatus === "offline" || syncStatus === "stale" ? "error" : "muted"}`}>{syncStatus === "live" ? t("เชื่อมต่อสดแล้ว") : syncStatus === "connecting" ? t("กำลังเชื่อมต่อข้อมูลล่าสุด…") : syncStatus === "offline" ? t("ออฟไลน์อยู่") : t("การเชื่อมต่อสดขัดข้อง กดโหลดใหม่ได้")}</p><button type="button" className="btn-secondary mt-3" onClick={reloadAndReconnect} disabled={pending || !navigator.onLine}>{t("โหลดข้อมูลล่าสุดและเชื่อมต่อใหม่")}</button></div>
+        <div className="card p-5 sm:p-7"><p className="eyebrow">{language === "en" ? "Shared bill" : "บิลที่แชร์"}</p><h1 className="mt-2 break-words text-3xl font-black">{snapshot.title}</h1><p className="muted mt-2 text-sm">{snapshot.closedAt ? t("บิลยืนยันแล้ว ดูสรุปได้อย่างเดียว") : t("เลือกชื่อของคุณ แล้วเลือกเฉพาะรายการที่ร่วมจ่าย")}</p>{snapshot.closedAt && <p role="status" className="mt-2 rounded-full bg-[#eee9fa] px-3 py-1 text-sm font-bold">{t("ยืนยันบิลแล้ว")}</p>}<p role="status" aria-live="polite" className={`mt-3 text-sm ${syncStatus === "offline" || syncStatus === "stale" ? "error" : "muted"}`}>{syncStatus === "live" ? t("เชื่อมต่อสดแล้ว") : syncStatus === "connecting" ? t("กำลังเชื่อมต่อข้อมูลล่าสุด…") : syncStatus === "offline" ? t("ออฟไลน์อยู่") : t("การเชื่อมต่อสดขัดข้อง กดโหลดใหม่ได้")}</p><button type="button" className="btn-secondary mt-3" onClick={reloadAndReconnect} disabled={pending || !navigator.onLine}>{t("โหลดข้อมูลล่าสุดและเชื่อมต่อใหม่")}</button></div>
         <div className="card p-5 sm:p-7"><label htmlFor="friend-identity" className="mb-2 block font-bold">{t("ฉันคือ")}</label><select id="friend-identity" className="field" value={selectedPersonId} disabled={pending || Boolean(snapshot.closedAt)} onChange={(event) => void choosePerson(event.target.value)}><option value="">{t("เลือกชื่อของคุณ")}</option>{snapshot.participants.map((person) => <option key={person.id} value={person.id}>{labels.get(person.id)}</option>)}</select>{currentPerson && <p className="muted mt-2 text-sm">{snapshot.closedAt ? t("กำลังดูสรุปของ") : t("กำลังแก้ไขรายการของ")} {labels.get(currentPerson.id)}</p>}</div>
         {currentPerson && <div className="card p-5 sm:p-7"><h2 className="section-title">{t("ตรวจยอดของฉัน")}</h2>{(() => { const status = snapshot.confirmations.find((entry) => entry.participantId === currentPerson.id); const current = status?.confirmedContentRevision === snapshot.revision; return <><p className="muted mt-2">{current ? t("ยืนยันยอดล่าสุดแล้ว") : status?.viewedAt ? t("ดูแล้ว ยังไม่ยืนยันยอดล่าสุด") : t("ยังไม่ยืนยันยอดล่าสุด")}</p><button type="button" className="btn-primary mt-4" disabled={!canEdit} onClick={() => void confirmOwnStatus(!current)}>{current ? t("ยกเลิกคำยืนยัน") : t("ยืนยันยอดของฉัน")}</button></>; })()}</div>}
         {error && <p role="alert" className="error rounded-xl bg-white p-4">{error}</p>}{notice && <p role="status" className="muted rounded-xl bg-white p-4">{notice}</p>}
         <section aria-label={t("ใบเสร็จและรายการ")} className="space-y-5">{snapshot.receipts.map((receipt) => <div key={receipt.id} className="card p-5 sm:p-7"><h2 className="section-title wrap-anywhere">{receipt.title}</h2><p className="muted mt-1 text-sm wrap-anywhere">{t("จ่ายโดย")} {labels.get(receipt.paidByParticipantId) ?? t("ยังไม่ระบุ")}</p><ul className="mt-4 space-y-3">{receipt.items.map((item) => { const selected = Boolean(currentPerson && item.participantIds.includes(currentPerson.id)); return <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#eeeaf6] p-4"><div className="min-w-0 flex-1"><p className="font-bold wrap-anywhere">{item.name}</p><p className="muted text-sm">{formatMoney(item.price, snapshot.currency)}  {t("· ร่วม")} {item.participantIds.length}  {t("คน")}</p></div><button type="button" className="chip min-w-24 shrink-0" data-selected={selected} aria-pressed={selected} aria-label={language === "en" ? `${selected ? "Remove me from" : "Join"} item ${receipt.title} · ${item.name}` : `${selected ? "เลิกร่วม" : "ร่วม"}รายการ ${receipt.title} · ${item.name}`} disabled={!canEdit} onClick={() => void toggle(receipt.id, item.id, !selected)}>{selected ? t("✓ ร่วมจ่าย") : t("ร่วมจ่าย")}</button></li>; })}</ul></div>)}</section>
         {result ? <section aria-labelledby="friend-summary-title"><h2 id="friend-summary-title" className="section-title mb-4">{t("สรุปยอดล่าสุด")}</h2><SessionSummary result={result} session={snapshot} focusParticipantId={currentPerson?.id ?? ""}/></section> : <p className="muted card p-5">{t("เมื่อรายการและผู้จ่ายครบ สรุปยอดจะปรากฏที่นี่")}</p>}
+        {snapshot.closedAt && <PaymentTracking billId={billId} session={snapshot} selectedParticipantId={selectedPersonId} owner={false} lockParticipantIdentity={Boolean(selectedPersonId)} onSession={setSnapshot}/>}
         <p className="muted text-xs">{t("QR ที่เจ้าของบิลอัปโหลดอยู่บนอุปกรณ์ของเจ้าของเท่านั้น เพื่อนจะเห็นเลข PromptPay ที่เจ้าของระบุไว้เมื่อมี")}</p>
+        <div className="pb-2 text-center"><Link href="/bills" className="btn-secondary inline-flex">← {t("กลับไปบิลของฉัน")}</Link></div>
       </>}
     </div>
   </main>;
